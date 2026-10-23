@@ -1,0 +1,32 @@
+{
+  "name": "@chatapp/backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --import tsx --watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:deploy": "prisma migrate deploy --schema prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@prisma/client": "^6.19.3",
+    "@chatapp/shared": "workspace:*",
+    "hono": "^4.13.13",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "prisma": "^6.19.3",
+    "tsx": "^4.20.6",
+    "typescript": "~6.0.3"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}

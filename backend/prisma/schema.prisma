@@ -1,0 +1,235 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                  String            @id @default(uuid())
+  name                String
+  username            String            @unique
+  phoneNumber         String            @unique
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  sentMessages        Message[]         @relation("SentMessages")
+  receivedMessages    Message[]         @relation("ReceivedMessages")
+  reads               MessageRead[]
+  groupMemberships    GroupMember[]
+  sentInvitations     GroupInvitation[] @relation("SentInvitations")
+  receivedInvitations GroupInvitation[] @relation("ReceivedInvitations")
+  mmPlayers           MurderMysteryPlayer[]
+  blockedUsers        BlockedUser[]     @relation("BlockingUsers")
+  blockedByUsers      BlockedUser[]     @relation("BlockedByUsers")
+
+  @@map("users")
+}
+
+
+model Group {
+  id              String            @id @default(uuid())
+  name            String
+  description     String?
+  createdById     String
+  isChugli        Boolean           @default(false)
+  durationMinutes Int?
+  expiresAt       DateTime?
+  warningSent     Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  members         GroupMember[]
+  messages        Message[]
+  invitations     GroupInvitation[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id             String   @id @default(uuid())
+  groupId        String
+  userId         String
+  role           String   @default("member")
+  anonymousAlias String?
+  joinedAt       DateTime @default(now())
+  group          Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model GroupInvitation {
+  id            String   @id @default(uuid())
+  groupId       String
+  invitedUserId String
+  senderId      String
+  status        String   @default("pending") // "pending" | "accepted" | "declined"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  group         Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  invitedUser   User     @relation("ReceivedInvitations", fields: [invitedUserId], references: [id], onDelete: Cascade)
+  sender        User     @relation("SentInvitations", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, invitedUserId])
+  @@index([invitedUserId])
+  @@index([groupId])
+  @@map("group_invitations")
+}
+
+model Message {
+  id                   String        @id @default(uuid())
+  text                 String
+  senderId             String
+  senderName           String
+  senderUsername       String?
+  recipientId          String?
+  groupId              String?
+  isDeletedForEveryone Boolean       @default(false)
+  deletedByUserId      String?
+  deletedByUsername    String?
+  deletedForUserIds    String[]      @default([])
+  isEdited             Boolean       @default(false)
+  editedAt             DateTime?
+  sender               User          @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient            User?         @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+  group                Group?        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt            DateTime      @default(now())
+  reads                MessageRead[]
+
+  @@index([createdAt])
+  @@index([senderId, recipientId])
+  @@index([groupId])
+  @@map("messages")
+}
+
+model MessageRead {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  userName  String
+  readAt    DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@map("message_reads")
+}
+
+model BlockedUser {
+  id            String   @id @default(uuid())
+  blockerId     String
+  blockedUserId String
+  createdAt     DateTime @default(now())
+
+  blocker       User     @relation("BlockingUsers", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedUser   User     @relation("BlockedByUsers", fields: [blockedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedUserId])
+  @@index([blockerId])
+  @@index([blockedUserId])
+  @@map("blocked_users")
+}
+
+
+model MurderMysteryRoom {
+  id                 String                  @id @default(uuid())
+  code               String                  @unique
+  name               String                  @default("Murder Mystery Room")
+  adminId            String
+  numMurderers       Int                     @default(1)
+  numHealers         Int                     @default(1)
+  votingDuration     Int                     @default(60) // in seconds
+  status             String                  @default("LOBBY") // LOBBY, ROLE_REVEAL, NIGHT_PHASE, HEALER_PHASE, NIGHT_RESULT, DISCUSSION, VOTING, RUNOFF_VOTING, VOTING_RESULT, GAME_OVER
+  phaseRound         Int                     @default(1)
+  phaseExpiresAt     DateTime?
+  nightTargetIds     String[]                @default([])
+  healerTargetIds    String[]                @default([])
+  eliminatedTonight  String[]                @default([])
+  eliminatedInVoting String?
+  eliminatedRole     String?
+  winnerTeam         String?                 // "INNOCENTS" | "MURDERERS"
+  initialPlayerCount Int                     @default(0)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  players            MurderMysteryPlayer[]
+  votes              MurderMysteryVote[]
+  messages           MurderMysteryMessage[]
+  history            MurderMysteryHistory[]
+
+  @@map("murder_mystery_rooms")
+}
+
+model MurderMysteryPlayer {
+  id               String            @id @default(uuid())
+  roomId           String
+  userId           String
+  name             String
+  username         String
+  isReady          Boolean           @default(false)
+  role             String?           // "MURDERER" | "HEALER" | "NORMAL"
+  isAlive          Boolean           @default(true)
+  eliminatedAt     DateTime?
+  eliminatedReason String?           // "NIGHT" | "VOTE"
+  eliminatedRound  Int?
+  hasViewedRole    Boolean           @default(false)
+  joinedAt         DateTime          @default(now())
+
+  room             MurderMysteryRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+  @@map("murder_mystery_players")
+}
+
+model MurderMysteryVote {
+  id        String            @id @default(uuid())
+  roomId    String
+  round     Int
+  voterId   String
+  targetId  String
+  isRunoff  Boolean           @default(false)
+  createdAt DateTime          @default(now())
+
+  room      MurderMysteryRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, round, voterId, isRunoff])
+  @@index([roomId, round])
+  @@map("murder_mystery_votes")
+}
+
+model MurderMysteryMessage {
+  id         String            @id @default(uuid())
+  roomId     String
+  senderId   String
+  senderName String
+  text       String
+  createdAt  DateTime          @default(now())
+
+  room       MurderMysteryRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([roomId, createdAt])
+  @@map("murder_mystery_messages")
+}
+
+model MurderMysteryHistory {
+  id          String            @id @default(uuid())
+  roomId      String
+  round       Int
+  phase       String
+  description String
+  createdAt   DateTime          @default(now())
+
+  room        MurderMysteryRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@map("murder_mystery_history")
+}
+
