@@ -8,9 +8,12 @@
     "scheme": "chatapp",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "bundleIdentifier": "com.ashish.chatapp",
       "icon": "./assets/expo.icon",
       "bitcode": false,
       "infoPlist": {
+        "NSCameraUsageDescription": "Allow ChatApp to access your camera for video calls and taking photos.",
+        "NSMicrophoneUsageDescription": "Allow ChatApp to access your microphone for voice notes and calls.",
         "NSPhotoLibraryUsageDescription": "Allow ChatApp to access your photos to save pictures to your gallery.",
         "NSPhotoLibraryAddUsageDescription": "Allow ChatApp to save photos to your gallery."
       }
