@@ -1,5 +1,6 @@
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
+const fs = require("fs");
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, "../..");
@@ -23,10 +24,18 @@ config.resolver.sourceExts = [
 // 4. Enable package exports resolution
 config.resolver.unstable_enablePackageExports = true;
 
-// 5. Explicit alias for @clerk/expo to guarantee direct resolution
+// 5. Dynamic alias resolution for monorepos (local takes precedence if present)
+const resolveModule = (name) => {
+  const local = path.resolve(projectRoot, "node_modules", name);
+  const root = path.resolve(workspaceRoot, "node_modules", name);
+  if (fs.existsSync(local)) return local;
+  if (fs.existsSync(root)) return root;
+  return local;
+};
+
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
-  "@clerk/expo": path.resolve(workspaceRoot, "node_modules/@clerk/expo"),
+  "@clerk/expo": resolveModule("@clerk/expo"),
 };
 
 module.exports = config;
