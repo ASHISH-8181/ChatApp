@@ -79,3 +79,4 @@ app.onError((err, c) => {
 });
 
 export { app };
+export default app;
