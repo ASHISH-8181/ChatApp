@@ -893,7 +893,7 @@ export default function ChatsTabScreen() {
         delete updated[renameContactUser.id];
       }
       setContactAliases(updated);
-      await setStoredItem(`contact_aliases_${currentUser.id}`, JSON.stringify(updated));
+      await mobileCache.setCachedAliases(currentUser.id, updated);
 
       // Sync with socket/backend API
       try {
@@ -921,7 +921,7 @@ export default function ChatsTabScreen() {
       const updated = { ...contactAliases };
       delete updated[renameContactUser.id];
       setContactAliases(updated);
-      await setStoredItem(`contact_aliases_${currentUser.id}`, JSON.stringify(updated));
+      await mobileCache.setCachedAliases(currentUser.id, updated);
 
       try {
         await socketService.setContactAlias(currentUser.id, renameContactUser.id, "");

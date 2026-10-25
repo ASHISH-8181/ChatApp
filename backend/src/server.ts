@@ -2,56 +2,11 @@ import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
 
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { Server as SocketIOServer } from "socket.io";
 import { config } from "./config/index.js";
-import { messagesRouter, usersRouter, groupsRouter, friendsRouter } from "./modules/messages/messages.controller.js";
-import { murderMysteryRouter } from "./modules/murder-mystery/murder-mystery.controller.js";
-import { livekitRouter } from "./modules/livekit/livekit.controller.js";
-import { uploadRouter } from "./modules/upload/upload.controller.js";
+import { app } from "./app.js";
 import { registerChatSocket } from "./sockets/chat.socket.js";
 import type { ClientToServerEvents, ServerToClientEvents } from "@chatapp/shared";
-
-// Real-time Chat & Murder Mystery Backend Server
-const app = new Hono();
-
-// Enable CORS for mobile clients, web clients, and local development
-app.use(
-  "*",
-  cors({
-    origin: config.corsOrigin === "*" ? "*" : config.corsOrigin.split(","),
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "Accept"],
-  })
-);
-
-// Health check endpoint
-app.get("/health", (c) => {
-  return c.json({
-    status: "ok",
-    service: "chatapp-backend",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// API Routes
-app.route("/api/messages", messagesRouter);
-app.route("/api/users", usersRouter);
-app.route("/api/groups", groupsRouter);
-app.route("/api/friends", friendsRouter);
-app.route("/api/murder-mystery", murderMysteryRouter);
-app.route("/api/livekit", livekitRouter);
-app.route("/api/upload", uploadRouter);
-
-// 404 handler
-app.notFound((c) => c.json({ error: "Route not found" }, 404));
-
-// Error handler
-app.onError((err, c) => {
-  console.error("Server error:", err);
-  return c.json({ error: err.message || "Internal server error" }, 500);
-});
 
 // Start HTTP server
 const server = serve(
