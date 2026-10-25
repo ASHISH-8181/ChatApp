@@ -16,6 +16,10 @@
       "bun": "1.4.3",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://chatapp-05lu.onrender.com",
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_cmVsYXhpbmctZmFsY29uLTUzNjIuY2xlcmsuYWNjb3VudHMuZGV2JA"
       }
     },
     "production": {

@@ -194,12 +194,12 @@ class SocketService {
     console.log(`Connecting Socket.IO to ${serverUrl}...`);
 
     this.socket = io(serverUrl, {
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 30,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 45000,
     });
 
     this.socket.on("connect", () => {
@@ -216,9 +216,13 @@ class SocketService {
     });
 
     this.socket.on("connect_error", (error) => {
-      console.warn("Socket.IO connect_error:", error.message);
-      this.setStatus("error");
-      this.errorListeners.forEach((l) => l(`Connection error: ${error.message}`));
+      console.warn(`Socket.IO connect_error (${error.message}). Retrying...`);
+      if (this.socket?.active) {
+        this.setStatus("connecting");
+      } else {
+        this.setStatus("error");
+        this.errorListeners.forEach((l) => l(`Connection error: ${error.message}`));
+      }
     });
 
     this.socket.on("chat:message", (message: ChatMessage) => {
