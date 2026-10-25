@@ -17,6 +17,7 @@
     "@chatapp/shared": "workspace:*",
     "@hono/node-server": "^2.1.5",
     "@prisma/client": "^6.19.3",
+    "cloudinary": "^2.11.0",
     "hono": "^4.13.13",
     "livekit-server-sdk": "^2.19.2",
     "socket.io": "^4.8.4"

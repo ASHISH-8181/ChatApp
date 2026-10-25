@@ -14,8 +14,12 @@ import {
 } from "react-native";
 
 import type { ChatMessage, ChatUser, GroupMemberInfo, ReadReceipt } from "@chatapp/shared";
+import { Image } from "expo-image";
 import { Fonts, Colors } from "@/constants/theme";
 import { Ionicons } from "@/components/Icon";
+import { translateToHindi, getCachedHindi, isHindiText } from "@/services/translation";
+import { UserAvatar } from "@/components/UserAvatar";
+import { useTheme } from "@/store/theme-context";
 
 interface ChatBubbleProps {
   message: ChatMessage;
@@ -24,8 +28,11 @@ interface ChatBubbleProps {
   members?: GroupMemberInfo[];
   users?: ChatUser[];
   isChugli?: boolean;
+  liveTranslateHindi?: boolean;
   onDelete?: (message: ChatMessage, deleteFor: "me" | "everyone") => void;
   onEdit?: (message: ChatMessage, newText: string) => void | Promise<void>;
+  onOpenViewOnce?: (message: ChatMessage) => void;
+  onPressImage?: (imageUrl: string) => void;
 }
 
 function formatTime(isoString: string): string {
@@ -38,24 +45,6 @@ function formatTime(isoString: string): string {
   }
 }
 
-function getAvatarColor(seed: string): string {
-  const colors = [
-    "#3B82F6", // blue
-    "#8B5CF6", // purple
-    "#EC4899", // pink
-    "#F97316", // orange
-    "#10B981", // emerald
-    "#06B6D4", // cyan
-    "#6366F1", // indigo
-    "#14B8A6", // teal
-    "#F43F5E", // rose
-  ];
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = seed.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return colors[Math.abs(hash) % colors.length];
-}
 
 interface ReaderAvatarBadgeProps {
   reader: ReadReceipt;
@@ -99,9 +88,10 @@ function ReaderAvatarBadge({
       resolvedName.toLowerCase().replace(/\s+/g, "");
 
   const resolvedUsername = rawUsername.startsWith("@") ? rawUsername : `@${rawUsername}`;
-  const initial = (resolvedName || "?").charAt(0).toUpperCase();
-  const avatarColor = isChugli ? "#8B5CF6" : getAvatarColor(resolvedUsername || resolvedName);
   const readTimeStr = formatTime(reader.readAt) || "recently";
+
+  const readerUser = isChugli ? null : users?.find((u) => u.id === reader.userId);
+  const readerAvatarUrl = readerUser?.avatarUrl;
 
   return (
     <View style={[styles.badgeContainer, isHovered && styles.badgeContainerHovered]}>
@@ -110,15 +100,23 @@ function ReaderAvatarBadge({
         onHoverOut={() => setIsHovered(false)}
         onPress={() => setIsHovered((prev) => !prev)}
         style={({ pressed }) => [
-          styles.miniAvatar,
-          { backgroundColor: avatarColor },
-          isMe ? styles.miniAvatarBorderMe : styles.miniAvatarBorderOther,
           (isHovered || pressed) && styles.miniAvatarActive,
         ]}
         hitSlop={6}
         accessibilityLabel={`Read by ${resolvedName} (${resolvedUsername})`}
       >
-        <Text style={styles.miniAvatarInitial}>{initial}</Text>
+        <UserAvatar
+          name={resolvedName}
+          username={resolvedUsername}
+          avatarUrl={readerAvatarUrl}
+          size={16}
+          fontSize={8}
+          isChugli={isChugli}
+          style={[
+            styles.miniAvatar,
+            isMe ? styles.miniAvatarBorderMe : styles.miniAvatarBorderOther,
+          ]}
+        />
       </Pressable>
 
       {/* Floating Expanded Profile Popover on Hover / Tap */}
@@ -132,9 +130,15 @@ function ReaderAvatarBadge({
         >
           {/* Header with avatar, display name, and username */}
           <View style={styles.popoverHeader}>
-            <View style={[styles.popoverAvatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.popoverAvatarInitial}>{initial}</Text>
-            </View>
+            <UserAvatar
+              name={resolvedName}
+              username={resolvedUsername}
+              avatarUrl={readerAvatarUrl}
+              size={30}
+              fontSize={12}
+              isChugli={isChugli}
+              style={styles.popoverAvatar}
+            />
             <View style={styles.popoverUserInfo}>
               <Text style={styles.popoverName} numberOfLines={1}>
                 {resolvedName}
@@ -174,9 +178,13 @@ export function ChatBubble({
   members,
   users,
   isChugli = false,
+  liveTranslateHindi = false,
   onDelete,
   onEdit,
+  onOpenViewOnce,
+  onPressImage,
 }: ChatBubbleProps) {
+  const { colors } = useTheme();
   const [showOptionsModal, setShowOptionsModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -190,6 +198,58 @@ export function ChatBubble({
   const hoverTimeoutRef = useRef<any>(null);
   const [entranceAnim] = useState(() => new Animated.Value(0));
 
+  // Live Hindi Translation State
+  const [manualTranslate, setManualTranslate] = useState<boolean | null>(null);
+  const [translatedHindi, setTranslatedHindi] = useState<string | null>(null);
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  const shouldTranslate = manualTranslate !== null ? manualTranslate : Boolean(liveTranslateHindi);
+  const effectiveHindi = translatedHindi || getCachedHindi(message.text) || null;
+  const isTranslationValid =
+    Boolean(effectiveHindi) &&
+    Boolean(effectiveHindi && /[\u0900-\u097F]/.test(effectiveHindi)) &&
+    effectiveHindi?.trim().toLowerCase() !== message.text?.trim().toLowerCase();
+
+  // Perform translation asynchronously when shouldTranslate is active
+  useEffect(() => {
+    if (
+      Boolean(message.isDeletedForEveryone) ||
+      !message.text ||
+      message.text === "Photo" ||
+      isHindiText(message.text) ||
+      !shouldTranslate
+    ) {
+      return;
+    }
+
+    const cached = getCachedHindi(message.text);
+    if (cached && /[\u0900-\u097F]/.test(cached)) {
+      return;
+    }
+
+    let isMounted = true;
+    Promise.resolve().then(async () => {
+      if (!isMounted) return;
+      setIsTranslating(true);
+      try {
+        const res = await translateToHindi(message.text);
+        if (isMounted && res) {
+          setTranslatedHindi(res);
+        }
+      } catch {
+        // Fallback handled in translation service
+      } finally {
+        if (isMounted) {
+          setIsTranslating(false);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [shouldTranslate, message.text, message.isDeletedForEveryone]);
+
   const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
   const getRemainingEditTimeMs = () => {
@@ -200,6 +260,10 @@ export function ChatBubble({
   };
 
   const isDeleted = Boolean(message.isDeletedForEveryone);
+  const showQuickTranslate =
+    !isDeleted &&
+    Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
+    !shouldTranslate;
 
   // Live timer for 5-minute countdown when modal is opened or mounted
   useEffect(() => {
@@ -265,11 +329,8 @@ export function ChatBubble({
   const senderDisplayUsername = isChugli
     ? "secret"
     : message.senderUsername;
-
-  const initial = (senderDisplayName || "?").charAt(0).toUpperCase();
-  const avatarColor = isChugli
-    ? "#8B5CF6"
-    : getAvatarColor(senderDisplayUsername || senderDisplayName || "");
+  const senderUser = isChugli ? null : users?.find((u) => u.id === message.senderId);
+  const senderAvatarUrl = senderUser?.avatarUrl;
 
   // Readers excluding the message sender themselves
   const readers = (message.reads || []).filter(
@@ -378,9 +439,12 @@ export function ChatBubble({
               delayLongPress={300}
               style={[
                 styles.bubble,
-                isDeleted ? styles.bubbleMeDeleted : styles.bubbleMe,
+                isDeleted ? styles.bubbleMeDeleted : [styles.bubbleMe, { backgroundColor: colors.bubbleSent }],
                 message.isEdited && !isDeleted && styles.bubbleMeEdited,
+                showQuickTranslate && !message.isEdited && styles.bubbleWithTranslate,
+                showQuickTranslate && message.isEdited && styles.bubbleWithTranslateEdited,
                 isSelected && styles.bubbleMeSelected,
+                Boolean(message.imageUrl && !message.isViewOnce) && styles.bubbleWithImage,
               ]}
             >
               {isDeleted ? (
@@ -390,6 +454,94 @@ export function ChatBubble({
                   <Text style={styles.deletedTextMe}>
                     This message was deleted by @{deletedByName}
                   </Text>
+                </View>
+              ) : message.isViewOnce ? (
+                /* View Once Message (Sender Perspective) */
+                <View>
+                  {message.isViewed ? (
+                    <View style={styles.viewOnceOpenedContainerMe}>
+                      <View style={styles.viewOnceCircleMeOpened}>
+                        <Ionicons name="checkmark" size={13} color="#CBD5E1" />
+                      </View>
+                      <View style={styles.viewOnceTextGroup}>
+                        <Text style={styles.viewOnceOpenedTextMe}>Opened</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.viewOnceContainerMe}>
+                      <View style={styles.viewOnceCircleMe}>
+                        {message.isUploading ? (
+                          <ActivityIndicator size={13} color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.viewOnceNumberMe}>1</Text>
+                        )}
+                      </View>
+                      <View style={styles.viewOnceTextGroup}>
+                        <Text style={styles.viewOnceTitleMe}>Photo</Text>
+                        <Text style={styles.viewOnceSubtitleMe}>
+                          {message.isUploading ? "Uploading..." : "View once"}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                  {message.text && message.text !== "Photo" ? (
+                    <Text style={styles.textMe}>{message.text}</Text>
+                  ) : null}
+                </View>
+              ) : message.imageUrl ? (
+                /* Standard Photo Message */
+                <View style={styles.imageBubbleContent}>
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => (onPressImage && message.imageUrl ? onPressImage(message.imageUrl) : undefined)}
+                    style={styles.imageThumbnailContainer}
+                  >
+                    <Image
+                      source={{ uri: message.imageUrl }}
+                      style={styles.imageThumbnail}
+                      contentFit="cover"
+                      transition={200}
+                    />
+                    {message.isUploading && (
+                      <View style={styles.imageLoadingOverlay}>
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  {message.text && message.text !== "Photo" ? (
+                    <Text style={styles.captionMe}>{message.text}</Text>
+                  ) : null}
+                </View>
+              ) : shouldTranslate && isTranslationValid ? (
+                /* Live Hindi Translated Message (Sender) */
+                <View style={styles.translateWrapper}>
+                  <View style={styles.hindiCardMe}>
+                    <View style={styles.hindiCardHeader}>
+                      <View style={styles.hindiTagMe}>
+                        <Ionicons name="language" size={12} color="#FFFFFF" />
+                        <Text style={styles.hindiTagLabelMe}>हिन्दी अनुवाद</Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => setManualTranslate(false)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        style={styles.showOriginalBtnMe}
+                        accessibilityLabel="Show original message"
+                      >
+                        <Text style={styles.showOriginalTextMe}>Original</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.hindiTextMe}>{effectiveHindi}</Text>
+                  </View>
+                  <Text style={styles.originalSubMe}>Original: {message.text}</Text>
+                </View>
+              ) : shouldTranslate && isTranslating ? (
+                /* Translating in progress */
+                <View style={styles.translateWrapper}>
+                  <Text style={styles.textMe}>{message.text}</Text>
+                  <View style={styles.translatingBadgeMe}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.translatingTextMe}>अनुवाद हो रहा है...</Text>
+                  </View>
                 </View>
               ) : (
                 <Text style={styles.textMe}>{message.text}</Text>
@@ -405,11 +557,30 @@ export function ChatBubble({
                   {message.isEdited && !isDeleted ? (
                     <Text style={styles.editedIndicatorMe}>• edited</Text>
                   ) : null}
+                  {!isDeleted &&
+                    Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
+                    !shouldTranslate && (
+                      <TouchableOpacity
+                        onPress={() => setManualTranslate(true)}
+                        style={styles.quickTranslateBtnMe}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                        accessibilityLabel="Translate to Hindi"
+                      >
+                        <Ionicons name="language" size={11} color="rgba(255,255,255,0.9)" />
+                        <Text style={styles.quickTranslateTextMe}>हिन्दी</Text>
+                      </TouchableOpacity>
+                    )}
                 </View>
 
                 {!isDeleted && (
                   <>
-                    {!hasReaders ? (
+                    {message.isUploading ? (
+                      <View style={styles.uploadingStatusRow}>
+                        <ActivityIndicator size={10} color="#BFDBFE" />
+                        <Text style={styles.uploadingTextMe}>Sending...</Text>
+                      </View>
+                    ) : !hasReaders ? (
                       <View style={styles.statusRow}>
                         <Text style={styles.singleCheck}>✓</Text>
                         <Text style={styles.statusText}>Sent</Text>
@@ -467,9 +638,15 @@ export function ChatBubble({
             },
           ]}
         >
-          <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-            <Text style={styles.avatarText}>{initial}</Text>
-          </View>
+          <UserAvatar
+            name={senderDisplayName}
+            username={senderDisplayUsername}
+            avatarUrl={senderAvatarUrl}
+            size={32}
+            fontSize={13}
+            isChugli={isChugli}
+            style={styles.avatar}
+          />
           <View style={styles.contentOther}>
             <View style={styles.senderHeader}>
               <Text style={styles.senderName}>{senderDisplayName}</Text>
@@ -489,9 +666,12 @@ export function ChatBubble({
                 delayLongPress={300}
                 style={[
                   styles.bubble,
-                  isDeleted ? styles.bubbleOtherDeleted : styles.bubbleOther,
+                  isDeleted ? styles.bubbleOtherDeleted : [styles.bubbleOther, { backgroundColor: colors.bubbleReceived, borderColor: colors.border }],
                   message.isEdited && !isDeleted && styles.bubbleOtherEdited,
+                  showQuickTranslate && !message.isEdited && styles.bubbleWithTranslate,
+                  showQuickTranslate && message.isEdited && styles.bubbleWithTranslateEdited,
                   isSelected && styles.bubbleOtherSelected,
+                  Boolean(message.imageUrl && !message.isViewOnce) && styles.bubbleWithImage,
                 ]}
               >
                 {isDeleted ? (
@@ -502,8 +682,94 @@ export function ChatBubble({
                       This message was deleted by @{deletedByName}
                     </Text>
                   </View>
+                ) : message.isViewOnce ? (
+                  /* View Once Message (Recipient Perspective) */
+                  <View>
+                    {message.isViewed ? (
+                      <View style={styles.viewOnceOpenedContainerOther}>
+                        <View style={styles.viewOnceCircleOtherOpened}>
+                          <Ionicons name="checkmark" size={13} color="#64748B" />
+                        </View>
+                        <View style={styles.viewOnceTextGroup}>
+                          <Text style={styles.viewOnceOpenedTextOther}>Opened</Text>
+                        </View>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={() => onOpenViewOnce?.(message)}
+                        style={styles.viewOncePillOther}
+                      >
+                        <View style={styles.viewOnceCircleOther}>
+                          <Text style={styles.viewOnceNumberOther}>1</Text>
+                        </View>
+                        <View style={styles.viewOnceTextGroup}>
+                          <View style={styles.viewOnceHeaderRow}>
+                            <Text style={styles.viewOnceTitleOther}>Photo</Text>
+                            <View style={styles.viewOnceTapHintBadge}>
+                              <Text style={styles.viewOnceTapHintText}>Tap to view</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.viewOnceSubtitleOther}>View once</Text>
+                        </View>
+                      </TouchableOpacity>
+                    )}
+                    {message.text && message.text !== "Photo" ? (
+                      <Text style={styles.textOther}>{message.text}</Text>
+                    ) : null}
+                  </View>
+                ) : message.imageUrl ? (
+                  /* Standard Photo Message */
+                  <View style={styles.imageBubbleContent}>
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      onPress={() => (onPressImage && message.imageUrl ? onPressImage(message.imageUrl) : undefined)}
+                      style={styles.imageThumbnailContainer}
+                    >
+                      <Image
+                        source={{ uri: message.imageUrl }}
+                        style={styles.imageThumbnail}
+                        contentFit="cover"
+                        transition={200}
+                      />
+                    </TouchableOpacity>
+                    {message.text && message.text !== "Photo" ? (
+                      <Text style={styles.captionOther}>{message.text}</Text>
+                    ) : null}
+                  </View>
+                ) : shouldTranslate && isTranslationValid ? (
+                  /* Live Hindi Translated Message (Recipient) */
+                  <View style={styles.translateWrapper}>
+                    <View style={styles.hindiCardOther}>
+                      <View style={styles.hindiCardHeader}>
+                        <View style={styles.hindiTagOther}>
+                          <Ionicons name="language" size={12} color={Colors.primary} />
+                          <Text style={styles.hindiTagLabelOther}>हिन्दी अनुवाद</Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => setManualTranslate(false)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          style={styles.showOriginalBtnOther}
+                          accessibilityLabel="Show original message"
+                        >
+                          <Text style={styles.showOriginalTextOther}>Original</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={styles.hindiTextOther}>{effectiveHindi}</Text>
+                    </View>
+                    <Text style={styles.originalSubOther}>Original: {message.text}</Text>
+                  </View>
+                ) : shouldTranslate && isTranslating ? (
+                  /* Translating in progress */
+                  <View style={styles.translateWrapper}>
+                    <Text style={styles.textOther}>{message.text}</Text>
+                    <View style={styles.translatingBadgeOther}>
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                      <Text style={styles.translatingTextOther}>अनुवाद हो रहा है...</Text>
+                    </View>
+                  </View>
                 ) : (
-                  <Text style={styles.textOther}>{message.text}</Text>
+                  <Text style={[styles.textOther, { color: colors.textPrimary }]}>{message.text}</Text>
                 )}
 
                 <View style={styles.footerOther}>
@@ -512,6 +778,20 @@ export function ChatBubble({
                     {message.isEdited && !isDeleted ? (
                       <Text style={styles.editedIndicatorOther}>• edited</Text>
                     ) : null}
+                    {!isDeleted &&
+                      Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
+                      !shouldTranslate && (
+                        <TouchableOpacity
+                          onPress={() => setManualTranslate(true)}
+                          style={styles.quickTranslateBtnOther}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          accessibilityLabel="Translate to Hindi"
+                        >
+                          <Ionicons name="language" size={11} color={Colors.primary} />
+                          <Text style={styles.quickTranslateTextOther}>हिन्दी</Text>
+                        </TouchableOpacity>
+                      )}
                   </View>
 
                   {!isDeleted && hasReaders && (
@@ -601,6 +881,47 @@ export function ChatBubble({
             </View>
 
             <View style={styles.actionButtonsList}>
+              {/* Option: Live Hindi Translation Toggle */}
+              {Boolean(message.text && message.text !== "Photo" && !isDeleted) && (
+                <TouchableOpacity
+                  style={styles.actionOptionBtn}
+                  onPress={() => {
+                    setShowOptionsModal(false);
+                    setIsSelected(false);
+                    setManualTranslate(shouldTranslate ? false : true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.actionOptionIcon,
+                      {
+                        backgroundColor: shouldTranslate
+                          ? "rgba(59, 130, 246, 0.12)"
+                          : "rgba(16, 185, 129, 0.12)",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="language"
+                      size={18}
+                      color={shouldTranslate ? Colors.primary : "#10B981"}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.actionOptionTitle}>
+                      {shouldTranslate ? "Show Original English" : "Translate to Hindi (लाइव अनुवाद)"}
+                    </Text>
+                    <Text style={styles.actionOptionDesc}>
+                      {shouldTranslate
+                        ? "Switch back to original English message"
+                        : "Instant live translation into Hindi"}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                </TouchableOpacity>
+              )}
+
               {/* Option 1: Edit message (ONLY visible within 5 min after sent, disappears after that) */}
               {canEdit && (
                 <TouchableOpacity
@@ -915,18 +1236,18 @@ export function ChatBubble({
                 const resolvedUsername = rawUsername.startsWith("@")
                   ? rawUsername
                   : `@${rawUsername}`;
-                const initialLetter = (resolvedName || "?").charAt(0).toUpperCase();
 
                 return (
                   <View key={reader.userId} style={styles.readerItem}>
-                    <View
-                      style={[
-                        styles.readerAvatar,
-                        { backgroundColor: isChugli ? "#8B5CF6" : getAvatarColor(resolvedUsername || resolvedName) },
-                      ]}
-                    >
-                      <Text style={styles.readerAvatarText}>{initialLetter}</Text>
-                    </View>
+                    <UserAvatar
+                      name={resolvedName}
+                      username={resolvedUsername}
+                      avatarUrl={isChugli ? null : users?.find((u) => u.id === reader.userId)?.avatarUrl}
+                      size={38}
+                      fontSize={16}
+                      isChugli={isChugli}
+                      style={styles.readerAvatar}
+                    />
                     <View style={styles.readerInfo}>
                       <Text style={styles.readerName}>{resolvedName}</Text>
                       <Text style={styles.readerUsername}>{resolvedUsername}</Text>
@@ -1059,25 +1380,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 6,
-    marginTop: 5,
-    overflow: "visible",
-    flexWrap: "nowrap",
+    gap: 5,
+    marginTop: 4,
+    flexWrap: "wrap",
   },
   footerOther: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 6,
-    marginTop: 5,
-    overflow: "visible",
-    flexWrap: "nowrap",
+    gap: 5,
+    marginTop: 4,
+    flexWrap: "wrap",
   },
   timeAndEditRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    flexShrink: 0,
+    flexShrink: 1,
+    flexWrap: "nowrap",
   },
   editedIndicatorMe: {
     fontSize: 9.5,
@@ -1827,5 +2147,388 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bold,
     color: "#FFFFFF",
   },
+  // View Once & Image Styles
+  viewOnceContainerMe: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
+    marginBottom: 4,
+  },
+  viewOnceCircleMe: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.8,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  viewOnceNumberMe: {
+    fontSize: 13,
+    fontFamily: Fonts.bold,
+    color: "#FFFFFF",
+  },
+  viewOnceTextGroup: {
+    flexDirection: "column",
+  },
+  viewOnceTitleMe: {
+    fontSize: 14,
+    fontFamily: Fonts.bold,
+    color: "#FFFFFF",
+  },
+  viewOnceSubtitleMe: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyMedium,
+    color: "rgba(255, 255, 255, 0.8)",
+  },
+  viewOnceOpenedContainerMe: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
+    marginBottom: 4,
+  },
+  viewOnceCircleMeOpened: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: "rgba(255, 255, 255, 0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  viewOnceOpenedTextMe: {
+    fontSize: 13,
+    fontFamily: Fonts.bodyMedium,
+    color: "rgba(255, 255, 255, 0.65)",
+    fontStyle: "italic",
+  },
+  viewOncePillOther: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(37, 99, 235, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(37, 99, 235, 0.25)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
+    marginBottom: 4,
+  },
+  viewOnceCircleOther: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.8,
+    borderColor: "#2563EB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  viewOnceNumberOther: {
+    fontSize: 13,
+    fontFamily: Fonts.bold,
+    color: "#2563EB",
+  },
+  viewOnceHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  viewOnceTitleOther: {
+    fontSize: 14,
+    fontFamily: Fonts.bold,
+    color: Colors.textPrimary,
+  },
+  viewOnceTapHintBadge: {
+    backgroundColor: "rgba(37, 99, 235, 0.12)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  viewOnceTapHintText: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: "#2563EB",
+  },
+  viewOnceSubtitleOther: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyMedium,
+    color: Colors.textMuted,
+  },
+  viewOnceOpenedContainerOther: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.18)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
+    marginBottom: 4,
+  },
+  viewOnceCircleOtherOpened: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: "#94A3B8",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  viewOnceOpenedTextOther: {
+    fontSize: 13,
+    fontFamily: Fonts.bodyMedium,
+    color: "#94A3B8",
+    fontStyle: "italic",
+  },
+  bubbleWithImage: {
+    paddingHorizontal: 4,
+    paddingTop: 4,
+    paddingBottom: 6,
+    width: 250,
+    maxWidth: "100%",
+    overflow: "hidden",
+  },
+  imageBubbleContent: {
+    width: "100%",
+  },
+  imageThumbnailContainer: {
+    width: "100%",
+    height: 180,
+    borderRadius: 14,
+    overflow: "hidden",
+    backgroundColor: "rgba(0, 0, 0, 0.15)",
+    marginBottom: 2,
+    position: "relative",
+  },
+  imageThumbnail: {
+    width: "100%",
+    height: "100%",
+  },
+  imageLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.38)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  captionMe: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontFamily: Fonts.bodyRegular,
+    lineHeight: 20,
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+  captionOther: {
+    color: Colors.textPrimary,
+    fontSize: 14,
+    fontFamily: Fonts.bodyRegular,
+    lineHeight: 20,
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+  uploadingStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  uploadingTextMe: {
+    fontSize: 10,
+    color: "#BFDBFE",
+    fontFamily: Fonts.bodyMedium,
+  },
+  uploadingTextOther: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    fontFamily: Fonts.bodyMedium,
+  },
+
+  /* Live Hindi Translation Styles */
+  translateWrapper: {
+    width: "100%",
+  },
+  hindiCardMe: {
+    backgroundColor: "rgba(255, 255, 255, 0.16)",
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.24)",
+  },
+  hindiCardOther: {
+    backgroundColor: "rgba(37, 99, 235, 0.08)",
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "rgba(37, 99, 235, 0.2)",
+  },
+  hindiCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  hindiTagMe: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  hindiTagOther: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(37, 99, 235, 0.12)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  hindiTagLabelMe: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: "#FFFFFF",
+  },
+  hindiTagLabelOther: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: Colors.primary,
+  },
+  showOriginalBtnMe: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.16)",
+  },
+  showOriginalBtnOther: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: "rgba(100, 116, 139, 0.1)",
+  },
+  showOriginalTextMe: {
+    fontSize: 10,
+    fontFamily: Fonts.bodyMedium,
+    color: "rgba(255, 255, 255, 0.9)",
+  },
+  showOriginalTextOther: {
+    fontSize: 10,
+    fontFamily: Fonts.bodyMedium,
+    color: Colors.textMuted,
+  },
+  hindiTextMe: {
+    fontSize: 15,
+    fontFamily: Fonts.bodyMedium,
+    color: "#FFFFFF",
+    lineHeight: 22,
+  },
+  hindiTextOther: {
+    fontSize: 15,
+    fontFamily: Fonts.bodyMedium,
+    color: Colors.textPrimary,
+    lineHeight: 22,
+  },
+  originalSubMe: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyRegular,
+    color: "rgba(255, 255, 255, 0.72)",
+    marginTop: 2,
+    paddingHorizontal: 2,
+    fontStyle: "italic",
+  },
+  originalSubOther: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textMuted,
+    marginTop: 2,
+    paddingHorizontal: 2,
+    fontStyle: "italic",
+  },
+  translatingBadgeMe: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  translatingBadgeOther: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(37, 99, 235, 0.08)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  translatingTextMe: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyMedium,
+    color: "#FFFFFF",
+  },
+  translatingTextOther: {
+    fontSize: 11,
+    fontFamily: Fonts.bodyMedium,
+    color: Colors.primary,
+  },
+  bubbleWithTranslate: {
+    minWidth: 185,
+  },
+  bubbleWithTranslateEdited: {
+    minWidth: 225,
+  },
+  quickTranslateBtnMe: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 4,
+  },
+  quickTranslateBtnOther: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(37, 99, 235, 0.09)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 4,
+  },
+  quickTranslateTextMe: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: "#FFFFFF",
+  },
+  quickTranslateTextOther: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: Colors.primary,
+  },
 });
+
 

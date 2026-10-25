@@ -58,11 +58,28 @@ export function registerChatSocket(
         socket.broadcast.emit("user:joined", userPayload);
         socket.broadcast.emit("users:list", allUsers);
 
-        // Join personalized room for secret updates
+        // Join personalized room for secret updates and direct alerts
         socket.join(`mm:user:${userPayload.id}`);
+        socket.join(`user:${userPayload.id}`);
 
         // Broadcast updated presence
         broadcastPresence();
+
+        // If user just transitioned to online, notify everyone who favorited them
+        if (activeUserSockets.get(userPayload.id)?.size === 1) {
+          try {
+            const admiringUserIds = await messagesService.getUsersWhoFavorited(userPayload.id);
+            for (const admirerId of admiringUserIds) {
+              io.to(`user:${admirerId}`).emit("user:favorite_online", {
+                userId: userPayload.id,
+                name: userPayload.name,
+                username: userPayload.username,
+              });
+            }
+          } catch (favErr) {
+            console.error("[Socket.IO] Error alerting favorite admirers:", favErr);
+          }
+        }
 
         if (callback) {
           callback({ status: "ok", user: userPayload });
@@ -79,8 +96,8 @@ export function registerChatSocket(
     // Handle message sending: Saved to PostgreSQL BEFORE broadcast
     socket.on("chat:send", async (payload: SendMessagePayload, callback) => {
       try {
-        const text = payload.text?.trim();
-        if (!text) {
+        const text = payload.text?.trim() || (payload.imageUrl ? (payload.isViewOnce ? "Photo (View once)" : "Photo") : "");
+        if (!text && !payload.imageUrl) {
           if (callback) callback({ status: "error", message: "Cannot send empty message." });
           return;
         }
@@ -93,12 +110,20 @@ export function registerChatSocket(
           senderUsername: payload.senderUsername,
           recipientId: payload.recipientId,
           groupId: payload.groupId,
+          imageUrl: payload.imageUrl,
+          imagePublicId: payload.imagePublicId,
+          isViewOnce: payload.isViewOnce,
         });
 
-        console.log(`[Socket.IO] Saved message ${savedMessage.id} (recipient: ${savedMessage.recipientId || "all"}, group: ${savedMessage.groupId || "none"})`);
+        console.log(`[Socket.IO] Saved message ${savedMessage.id} (recipient: ${savedMessage.recipientId || "all"}, group: ${savedMessage.groupId || "none"}, viewOnce: ${Boolean(savedMessage.isViewOnce)})`);
+
+        const broadcastMsg: any = savedMessage;
+        if (payload.clientTempId) {
+          broadcastMsg.clientTempId = payload.clientTempId;
+        }
 
         // 2. Broadcast to ALL connected clients
-        io.emit("chat:message", savedMessage);
+        io.emit("chat:message", broadcastMsg);
 
         if (callback) {
           callback({ status: "ok", message: savedMessage });
@@ -107,6 +132,33 @@ export function registerChatSocket(
         const msg = error instanceof Error ? error.message : "Failed to send message";
         console.error(`[Socket.IO] chat:send error:`, msg);
         socket.emit("error", { message: msg });
+        if (callback) {
+          callback({ status: "error", message: msg });
+        }
+      }
+    });
+
+    // Handle View-Once photo opening
+    socket.on("message:viewOnce:open", async (payload, callback) => {
+      try {
+        const result = await messagesService.openViewOnceMessage(payload.messageId, payload.userId);
+        console.log(`[Socket.IO] ViewOnce photo opened: ${payload.messageId} by user: ${payload.userId}`);
+
+        // Broadcast to all clients that this message is now opened
+        io.emit("message:viewOnce:opened", {
+          messageId: result.messageId,
+          userId: payload.userId,
+          viewedAt: result.viewedAt,
+          recipientId: result.recipientId,
+          groupId: result.groupId,
+        });
+
+        if (callback) {
+          callback({ status: "ok", imageUrl: result.imageUrl });
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Failed to open view-once photo";
+        console.error(`[Socket.IO] message:viewOnce:open error:`, msg);
         if (callback) {
           callback({ status: "error", message: msg });
         }
@@ -212,6 +264,63 @@ export function registerChatSocket(
       }
     });
 
+    // Handle sending a friend request
+    socket.on("friend:request:send", async (payload, callback) => {
+      try {
+        const req = await messagesService.sendFriendRequest(payload.senderId, payload.targetUsername);
+        console.log(`[Socket.IO] Friend request sent from ${payload.senderId} to @${payload.targetUsername} (status: ${req.status})`);
+
+        // Emit to target receiver's personal room
+        io.to(`user:${req.receiverId}`).emit("friend:request:received", req);
+
+        // If request was mutually accepted immediately:
+        if (req.status === "accepted") {
+          io.to(`user:${req.senderId}`).emit("friend:request:responded", {
+            requestId: req.id,
+            status: "accepted",
+            user: req.receiver!,
+          });
+          io.to(`user:${req.receiverId}`).emit("friend:request:responded", {
+            requestId: req.id,
+            status: "accepted",
+            user: req.sender!,
+          });
+        }
+
+        if (callback) callback({ status: "ok", request: req });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Failed to send friend request";
+        console.error(`[Socket.IO] friend:request:send error:`, msg);
+        if (callback) callback({ status: "error", message: msg });
+      }
+    });
+
+    // Handle responding to a friend request (accept or declined)
+    socket.on("friend:request:respond", async (payload, callback) => {
+      try {
+        const req = await messagesService.respondFriendRequest(payload.requestId, payload.userId, payload.action);
+        console.log(`[Socket.IO] Friend request ${payload.requestId} responded with ${payload.action} by user ${payload.userId}`);
+
+        // Notify both parties of the updated status
+        io.to(`user:${req.senderId}`).emit("friend:request:responded", {
+          requestId: req.id,
+          status: req.status as "accepted" | "declined",
+          user: req.receiver!,
+        });
+        io.to(`user:${req.receiverId}`).emit("friend:request:responded", {
+          requestId: req.id,
+          status: req.status as "accepted" | "declined",
+          user: req.sender!,
+        });
+
+        if (callback) callback({ status: "ok", request: req });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Failed to respond to friend request";
+        console.error(`[Socket.IO] friend:request:respond error:`, msg);
+        if (callback) callback({ status: "error", message: msg });
+      }
+    });
+
     // Handle group creation with invitations
 
     socket.on("group:create", async (payload, callback) => {
@@ -286,10 +395,62 @@ export function registerChatSocket(
         const res = await messagesService.endChugliGroup(payload.groupId, payload.userId);
         console.log(`[Socket.IO] Admin ended Chugli group ${res.name} (${res.id})`);
         io.emit("chugli:expired", { groupId: res.id, groupName: res.name });
+        io.emit("group:deleted", {
+          groupId: res.id,
+          groupName: res.name,
+          deletedByUserId: payload.userId,
+        });
         if (callback) callback({ status: "ok" });
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Failed to end Chugli session";
         console.error(`[Socket.IO] chugli:end error:`, msg);
+        if (callback) callback({ status: "error", message: msg });
+      }
+    });
+
+    // Handle group deletion by admin (regular or Chugli group)
+    socket.on("group:delete", async (payload, callback) => {
+      try {
+        const res = await messagesService.deleteGroup(payload.groupId, payload.userId);
+        console.log(`[Socket.IO] Admin ${payload.userId} deleted group ${res.name} (${res.id})`);
+        io.emit("group:deleted", {
+          groupId: res.id,
+          groupName: res.name,
+          deletedByUserId: payload.userId,
+        });
+        if (callback) callback({ status: "ok", groupId: res.id });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Failed to delete group";
+        console.error(`[Socket.IO] group:delete error:`, msg);
+        if (callback) callback({ status: "error", message: msg });
+      }
+    });
+
+    // Handle member exiting group
+    socket.on("group:leave", async (payload, callback) => {
+      try {
+        const res = await messagesService.leaveGroup(payload.groupId, payload.userId);
+        console.log(`[Socket.IO] User ${payload.userId} left group ${res.groupName} (${res.groupId})`);
+
+        if (res.isDeleted) {
+          io.emit("group:deleted", {
+            groupId: res.groupId,
+            groupName: res.groupName,
+            deletedByUserId: payload.userId,
+          });
+          if (callback) callback({ status: "ok", group: null, isDeleted: true });
+        } else if (res.group) {
+          io.emit("group:updated", res.group);
+          io.emit("group:member_left", {
+            groupId: res.groupId,
+            userId: res.userId,
+            userName: res.userName,
+          });
+          if (callback) callback({ status: "ok", group: res.group, isDeleted: false });
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Failed to leave group";
+        console.error(`[Socket.IO] group:leave error:`, msg);
         if (callback) callback({ status: "error", message: msg });
       }
     });
@@ -643,6 +804,99 @@ export function registerChatSocket(
         socket.to(roomName).emit("game:voice:status", payload);
       } catch (err: any) {
         console.error("[Voice] Status relay error:", err.message);
+      }
+    });
+
+    // Handle friend request send
+    socket.on("friend:request:send", async (payload: { senderId: string; targetUsername: string }, callback) => {
+      try {
+        const result = await messagesService.sendFriendRequest(payload.senderId, payload.targetUsername);
+        // Alert receiver in their personal room
+        io.to(`user:${result.receiverId}`).emit("friend:request:received", result);
+        // Also notify sender
+        io.to(`user:${result.senderId}`).emit("friend:request:received", result);
+
+        if (callback) {
+          callback({ status: "ok", request: result });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] friend:request:send error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to send friend request" });
+        }
+      }
+    });
+
+    // Handle friend request respond (accept / decline)
+    socket.on("friend:request:respond", async (payload: { requestId: string; userId: string; action: "accept" | "declined" }, callback) => {
+      try {
+        const result = await messagesService.respondFriendRequest(payload.requestId, payload.userId, payload.action);
+        // Broadcast response event to both users with their counterpart user info
+        const responseStatus = result.status as "accepted" | "declined";
+        if (result.receiver) {
+          io.to(`user:${result.senderId}`).emit("friend:request:responded", {
+            requestId: result.id,
+            status: responseStatus,
+            user: result.receiver,
+          });
+        }
+        if (result.sender) {
+          io.to(`user:${result.receiverId}`).emit("friend:request:responded", {
+            requestId: result.id,
+            status: responseStatus,
+            user: result.sender,
+          });
+        }
+
+        if (callback) {
+          callback({ status: "ok", request: result });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] friend:request:respond error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to respond to friend request" });
+        }
+      }
+    });
+
+    // Handle unfriend user
+    socket.on("friend:unfriend", async (payload: { userId: string; targetUserId: string }, callback) => {
+      try {
+        await messagesService.unfriendUser(payload.userId, payload.targetUserId);
+        // Alert both users in their personal rooms so their UI updates immediately
+        io.to(`user:${payload.userId}`).emit("friend:unfriended", {
+          userId: payload.userId,
+          targetUserId: payload.targetUserId,
+        });
+        io.to(`user:${payload.targetUserId}`).emit("friend:unfriended", {
+          userId: payload.targetUserId,
+          targetUserId: payload.userId,
+        });
+
+        if (callback) {
+          callback({ status: "ok" });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] friend:unfriend error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to unfriend user" });
+        }
+      }
+    });
+
+    // Handle setting a private contact alias / nickname
+    socket.on("user:alias:set", async (payload: { userId: string; targetUserId: string; customName: string }, callback) => {
+      try {
+        const result = await messagesService.setContactAlias(payload.userId, payload.targetUserId, payload.customName);
+        console.log(`[Socket.IO] User ${payload.userId} set private alias for ${payload.targetUserId}: "${result.customName}"`);
+        if (callback) {
+          callback({ status: "ok", customName: result.customName });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] user:alias:set error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to set alias" });
+        }
       }
     });
 

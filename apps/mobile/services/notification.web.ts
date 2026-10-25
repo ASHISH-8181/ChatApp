@@ -34,3 +34,25 @@ export async function sendChugliWarningNotification(
     console.warn("[Notifications Web] Failed to present notification:", error);
   }
 }
+
+export async function sendFavoriteOnlineNotification(
+  name: string,
+  username: string
+): Promise<void> {
+  const title = `⭐ ${name} is online!`;
+  const body = `@${username} just came online. Tap to start chatting!`;
+
+  try {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        new Notification(title, {
+          body,
+          icon: "/favicon.ico",
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("[Notifications Web] Failed to present favorite notification:", error);
+  }
+}
+

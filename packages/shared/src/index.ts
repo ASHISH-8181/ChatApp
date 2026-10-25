@@ -3,21 +3,44 @@ export interface ChatUser {
   name: string;
   username: string;
   phoneNumber: string;
+  email?: string | null;
+  clerkId?: string | null;
   createdAt?: string;
+  avatarUrl?: string | null;
 }
 
 export interface RegisterUserPayload {
   name: string;
   username: string;
   phoneNumber: string;
+  email?: string | null;
+  password?: string;
+  clerkId?: string | null;
+  avatarUrl?: string | null;
 }
 
 export interface LoginUserPayload {
-  identifier: string; // username or phone number
+  identifier: string; // username, phone number, or email
+  password?: string;
+}
+
+export interface ClerkAuthCheckResponse {
+  exists: boolean;
+  user?: ChatUser;
+  message?: string;
+}
+
+export interface CheckAvailabilityResponse {
+  usernameAvailable: boolean;
+  phoneAvailable: boolean;
+  phoneValid?: boolean;
+  phoneMessage?: string;
+  phoneCarrier?: string;
 }
 
 export interface UpdateUserPayload {
-  name: string;
+  name?: string;
+  avatarUrl?: string | null;
 }
 
 export interface ReadReceipt {
@@ -44,6 +67,14 @@ export interface ChatMessage {
   deletedForUserIds?: string[];
   isEdited?: boolean;
   editedAt?: string;
+  imageUrl?: string | null;
+  imagePublicId?: string | null;
+  isViewOnce?: boolean;
+  isViewed?: boolean;
+  viewedAt?: string | null;
+  viewedByUserId?: string | null;
+  isUploading?: boolean;
+  clientTempId?: string;
 }
 
 export interface EditMessagePayload {
@@ -72,6 +103,35 @@ export interface BlockedUserInfo {
   createdAt: string;
 }
 
+export interface FriendRequestInfo {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  status: "pending" | "accepted" | "declined";
+  createdAt: string;
+  updatedAt: string;
+  sender?: ChatUser;
+  receiver?: ChatUser;
+}
+
+export type FriendshipStatus = "friends" | "pending_sent" | "pending_received" | "none";
+
+export interface FriendStatusResponse {
+  status: FriendshipStatus;
+  requestId?: string;
+  isFriend: boolean;
+}
+
+export interface SendFriendRequestPayload {
+  senderId: string;
+  targetUsername: string;
+}
+
+export interface RespondFriendRequestPayload {
+  requestId: string;
+  userId: string;
+  action: "accept" | "declined";
+}
 
 export interface SendMessagePayload {
   text: string;
@@ -80,6 +140,10 @@ export interface SendMessagePayload {
   senderUsername?: string;
   recipientId?: string;
   groupId?: string;
+  imageUrl?: string | null;
+  imagePublicId?: string | null;
+  isViewOnce?: boolean;
+  clientTempId?: string;
 }
 
 export interface MarkReadPayload {
@@ -164,6 +228,16 @@ export interface SetChugliAliasPayload {
   groupId: string;
   userId: string;
   alias: string;
+}
+
+export interface DeleteGroupPayload {
+  groupId: string;
+  userId: string;
+}
+
+export interface LeaveGroupPayload {
+  groupId: string;
+  userId: string;
 }
 
 export interface HealthResponse {
@@ -323,6 +397,8 @@ export interface ServerToClientEvents {
   "messages:read": (data: { messageIds: string[]; reader: ReadReceipt }) => void;
   "group:created": (group: GroupChat) => void;
   "group:updated": (group: GroupChat) => void;
+  "group:deleted": (data: { groupId: string; groupName: string; deletedByUserId: string }) => void;
+  "group:member_left": (data: { groupId: string; userId: string; userName: string }) => void;
   "group:invitation": (invitation: GroupInvitationInfo) => void;
   "chugli:warning": (data: { groupId: string; groupName: string; expiresAt: string; remainingMinutes: number }) => void;
   "chugli:extended": (data: { group: GroupChat; expiresAt: string; additionalMinutes: number }) => void;
@@ -356,16 +432,51 @@ export interface ServerToClientEvents {
   }) => void;
   "user:blocked": (data: { blockerId: string; targetUserId: string }) => void;
   "user:unblocked": (data: { blockerId: string; targetUserId: string }) => void;
+  "user:favorite_online": (data: {
+    userId: string;
+    name: string;
+    username: string;
+  }) => void;
+  "message:viewOnce:opened": (data: {
+    messageId: string;
+    userId: string;
+    viewedAt: string;
+    recipientId?: string;
+    groupId?: string;
+  }) => void;
   "game:chat:message": (message: GameChatMessage) => void;
   "game:voice:chunk": (data: GameVoiceChunk) => void;
   "game:voice:status": (data: GameVoiceStatus) => void;
+  "friend:request:received": (request: FriendRequestInfo) => void;
+  "friend:request:responded": (data: { requestId: string; status: "accepted" | "declined"; user: ChatUser }) => void;
+  "friend:unfriended": (data: { userId: string; targetUserId: string }) => void;
   error: (error: { message: string }) => void;
 }
 
 export interface ClientToServerEvents {
+  "friend:request:send": (
+    payload: SendFriendRequestPayload,
+    callback?: (response: { status: "ok"; request?: FriendRequestInfo } | { status: "error"; message: string }) => void
+  ) => void;
+  "friend:request:respond": (
+    payload: RespondFriendRequestPayload,
+    callback?: (response: { status: "ok"; request?: FriendRequestInfo } | { status: "error"; message: string }) => void
+  ) => void;
+  "friend:unfriend": (
+    payload: { userId: string; targetUserId: string },
+    callback?: (response: { status: "ok" } | { status: "error"; message: string }) => void
+  ) => void;
+  "user:alias:set": (
+    payload: { userId: string; targetUserId: string; customName: string },
+    callback?: (response: { status: "ok"; customName: string } | { status: "error"; message: string }) => void
+  ) => void;
   "chat:send": (
     payload: SendMessagePayload,
     callback?: (response: { status: "ok"; message?: ChatMessage } | { status: "error"; message: string }) => void
+  ) => void;
+  "message:viewOnce:open": (
+    payload: { messageId: string; userId: string },
+    callback?: (response: { status: "ok"; imageUrl?: string } | { status: "error"; message: string }) => void
   ) => void;
   "message:edit": (
     payload: EditMessagePayload,
@@ -400,6 +511,14 @@ export interface ClientToServerEvents {
   "group:respondInvite": (
     payload: RespondInvitationPayload,
     callback?: (response: { status: "ok"; group?: GroupChat } | { status: "error"; message: string }) => void
+  ) => void;
+  "group:delete": (
+    payload: DeleteGroupPayload,
+    callback?: (response: { status: "ok"; groupId?: string } | { status: "error"; message: string }) => void
+  ) => void;
+  "group:leave": (
+    payload: LeaveGroupPayload,
+    callback?: (response: { status: "ok"; group?: GroupChat | null; isDeleted?: boolean } | { status: "error"; message: string }) => void
   ) => void;
   "chugli:extend": (
     payload: ExtendChugliPayload,

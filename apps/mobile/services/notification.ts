@@ -16,8 +16,10 @@ if (Platform.OS !== "web") {
         }),
       });
     }
-  } catch (e) {
-    console.log("[Notifications] Native module load note:", e);
+  } catch (e: any) {
+    if (!e?.message?.includes("ExpoTopicSubscriptionModule")) {
+      console.log("[Notifications] Native module load note:", e);
+    }
   }
 }
 
@@ -85,3 +87,41 @@ export async function sendChugliWarningNotification(
     console.warn("[Notifications] Failed to present notification:", error);
   }
 }
+
+export async function sendFavoriteOnlineNotification(
+  name: string,
+  username: string
+): Promise<void> {
+  const title = `⭐ ${name} is online!`;
+  const body = `@${username} just came online. Tap to start chatting!`;
+
+  try {
+    // 1. Web Notification
+    if (Platform.OS === "web" && typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        new Notification(title, {
+          body,
+          icon: "/favicon.ico",
+        });
+        return;
+      }
+    }
+
+    // 2. Native Expo Local Notification
+    if (Notifications?.scheduleNotificationAsync) {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority?.HIGH,
+          data: { type: "favorite_online", name, username },
+        },
+        trigger: null,
+      });
+    }
+  } catch (error) {
+    console.warn("[Notifications] Failed to present favorite online notification:", error);
+  }
+}
+

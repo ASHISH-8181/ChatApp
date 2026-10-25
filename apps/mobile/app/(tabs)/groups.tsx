@@ -14,12 +14,17 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useNavigation } from "expo-router";
 import type { ChatMessage, GroupChat, GroupInvitationInfo } from "@chatapp/shared";
 import { useUser } from "@/store/user-context";
 import { socketService, type ConnectionStatus } from "@/services/socket";
+import * as ScreenCapture from "expo-screen-capture";
 import {
   fetchGroups,
   createGroup,
+  deleteGroup,
+  leaveGroup,
+  clearChatApi,
   inviteGroupMembers,
   fetchMessageHistory,
   fetchAllUsers,
@@ -28,24 +33,50 @@ import {
   extendChugliSession,
   endChugliSession,
   setChugliMemberAlias,
+  uploadImageApi,
 } from "@/services/api";
 import {
   sendChugliWarningNotification,
   requestNotificationPermission,
 } from "@/services/notification";
+import { mobileCache } from "@/services/cache";
 import { generateRandomAlias, formatCountdown } from "@/utils/chugli";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ChatInput } from "@/components/ChatInput";
+import { PhotoPickerModal } from "@/components/PhotoPickerModal";
+import { ViewOncePhotoModal } from "@/components/ViewOncePhotoModal";
+import { ImageViewerModal } from "@/components/ImageViewerModal";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorBanner } from "@/components/ErrorBanner";
+import { LockNavButton } from "@/components/LockNavButton";
+import { ThemeNavButton } from "@/components/ThemeNavButton";
+import { useTheme } from "@/store/theme-context";
 import { Ionicons } from "@/components/Icon";
+import { Fonts, Colors } from "@/constants/theme";
 
 export default function GroupsTabScreen() {
   const { currentUser, registeredUsers, setRegisteredUsers } = useUser();
+  const { colors, isDark } = useTheme();
 
-  const [groups, setGroups] = useState<GroupChat[]>([]);
-  const [loadingGroups, setLoadingGroups] = useState(true);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [groups, setGroups] = useState<GroupChat[]>(() => {
+    if (currentUser) {
+      return mobileCache.getSyncGroups(currentUser.id) || [];
+    }
+    return [];
+  });
+  const [loadingGroups, setLoadingGroups] = useState(() => {
+    if (currentUser) {
+      const cached = mobileCache.getSyncGroups(currentUser.id);
+      return !cached || cached.length === 0;
+    }
+    return true;
+  });
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (currentUser) {
+      return mobileCache.getSyncMessages(currentUser.id) || [];
+    }
+    return [];
+  });
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [bannerError, setBannerError] = useState<string | null>(null);
@@ -56,6 +87,45 @@ export default function GroupsTabScreen() {
 
   // Active Group Chat Room (null = groups list)
   const [activeGroup, setActiveGroup] = useState<GroupChat | null>(null);
+  const navigation = useNavigation();
+
+  // Hide bottom navigation tabs when activeGroup chat is open, restore when leaving
+  useEffect(() => {
+    navigation.setOptions({
+      tabBarStyle: activeGroup
+        ? { display: "none" }
+        : [
+            {
+              backgroundColor: colors.card,
+              borderTopColor: colors.border,
+              borderTopWidth: 1,
+              height: Platform.OS === "ios" ? 88 : 64,
+              paddingTop: 8,
+              paddingBottom: Platform.OS === "ios" ? 28 : 10,
+              elevation: 10,
+              shadowColor: isDark ? "#000000" : "#0F172A",
+              shadowOpacity: isDark ? 0.25 : 0.05,
+            },
+          ],
+    });
+    return () => {
+      navigation.setOptions({
+        tabBarStyle: [
+          {
+            backgroundColor: colors.card,
+            borderTopColor: colors.border,
+            borderTopWidth: 1,
+            height: Platform.OS === "ios" ? 88 : 64,
+            paddingTop: 8,
+            paddingBottom: Platform.OS === "ios" ? 28 : 10,
+            elevation: 10,
+            shadowColor: isDark ? "#000000" : "#0F172A",
+            shadowOpacity: isDark ? 0.25 : 0.05,
+          },
+        ],
+      });
+    };
+  }, [activeGroup, navigation, colors, isDark]);
 
   // Search in groups list
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
@@ -123,6 +193,11 @@ export default function GroupsTabScreen() {
     remainingMinutes: number;
     expiresAt?: string;
   } | null>(null);
+
+  // View Once & Photo Sharing state
+  const [showPhotoPicker, setShowPhotoPicker] = useState(false);
+  const [activeViewOnce, setActiveViewOnce] = useState<{ url: string; senderName: string } | null>(null);
+  const [expandedImage, setExpandedImage] = useState<{ url: string; caption?: string } | null>(null);
   const [extendingSession, setExtendingSession] = useState(false);
 
   // Invite Members Modal State (inside existing group)
@@ -134,7 +209,185 @@ export default function GroupsTabScreen() {
   // Group Members Info Modal
   const [showMembersModal, setShowMembersModal] = useState(false);
 
+  // Delete Group Confirmation Modal State (Admin)
+  const [groupToDelete, setGroupToDelete] = useState<GroupChat | null>(null);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+
+  // Exit Group Confirmation Modal State
+  const [showExitConfirmModal, setShowExitConfirmModal] = useState(false);
+  const [isExitingGroup, setIsExitingGroup] = useState(false);
+
+  // Clear Chat Confirmation Modal State
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
+  const [isClearingChat, setIsClearingChat] = useState(false);
+
+  // Group Header Options Menu
+  const [showGroupOptionsMenu, setShowGroupOptionsMenu] = useState(false);
+
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
+
+  // Screen Capture Protection State for Chugli Groups
+  const isChugliActive = Boolean(activeGroup?.isChugli);
+  const [showScreenshotBlockedAlert, setShowScreenshotBlockedAlert] = useState(false);
+  const [isWindowBlurred, setIsWindowBlurred] = useState(false);
+
+  // Auto-hide screenshot blocked toast
+  useEffect(() => {
+    if (showScreenshotBlockedAlert) {
+      const timer = setTimeout(() => {
+        setShowScreenshotBlockedAlert(false);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [showScreenshotBlockedAlert]);
+
+  // Native (Android/iOS) ScreenCapture Prevention
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+
+    let screenshotSub: { remove: () => void } | null = null;
+
+    if (isChugliActive) {
+      ScreenCapture.isAvailableAsync()
+        .then((available) => {
+          if (available) {
+            return ScreenCapture.preventScreenCaptureAsync("chugli-room");
+          }
+        })
+        .catch((err) => {
+          console.warn("[ScreenCapture] prevent failed:", err);
+        });
+
+      try {
+        screenshotSub = ScreenCapture.addScreenshotListener(() => {
+          setShowScreenshotBlockedAlert(true);
+        });
+      } catch (err) {
+        console.warn("[ScreenCapture] listener failed:", err);
+      }
+    } else {
+      ScreenCapture.isAvailableAsync()
+        .then((available) => {
+          if (available) {
+            return ScreenCapture.allowScreenCaptureAsync("chugli-room");
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      if (screenshotSub) {
+        try {
+          screenshotSub.remove();
+        } catch {}
+      }
+      if (isChugliActive) {
+        ScreenCapture.isAvailableAsync()
+          .then((available) => {
+            if (available) {
+              return ScreenCapture.allowScreenCaptureAsync("chugli-room");
+            }
+          })
+          .catch(() => {});
+      }
+    };
+  }, [isChugliActive]);
+
+  // Web Screen Capture Prevention (PrintScreen, shortcuts, blur privacy shield, print blocker)
+  useEffect(() => {
+    if (!isChugliActive || Platform.OS !== "web" || typeof window === "undefined") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isPrintScreen = e.key === "PrintScreen" || e.code === "PrintScreen";
+      const isCtrlP =
+        (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "p" || e.code === "KeyP");
+      const isSnippingTool =
+        (e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        (e.key.toLowerCase() === "s" || e.code === "KeyS");
+      const isMacScreenshot =
+        e.metaKey && e.shiftKey && ["3", "4", "5"].includes(e.key);
+      const isSavePage =
+        (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "s" || e.code === "KeyS");
+
+      if (isPrintScreen || isCtrlP || isSnippingTool || isMacScreenshot || isSavePage) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (navigator?.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText("🚫 Screenshots are blocked in Chugli Secret Room.")
+            .catch(() => {});
+        }
+
+        setShowScreenshotBlockedAlert(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "PrintScreen" || e.code === "PrintScreen") {
+        if (navigator?.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText("🚫 Screenshots are blocked in Chugli Secret Room.")
+            .catch(() => {});
+        }
+        setShowScreenshotBlockedAlert(true);
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      setShowScreenshotBlockedAlert(true);
+    };
+
+    const handleBlur = () => {
+      setIsWindowBlurred(true);
+    };
+
+    const handleFocus = () => {
+      setIsWindowBlurred(false);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        setIsWindowBlurred(true);
+      } else {
+        setIsWindowBlurred(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("contextmenu", handleContextMenu);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const styleEl = document.createElement("style");
+    styleEl.id = "chugli-anti-screenshot-css";
+    styleEl.innerHTML = `
+      @media print {
+        body, #root, [data-testid="root"], div {
+          display: none !important;
+          visibility: hidden !important;
+        }
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("contextmenu", handleContextMenu);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      const el = document.getElementById("chugli-anti-screenshot-css");
+      if (el) el.remove();
+      setIsWindowBlurred(false);
+    };
+  }, [isChugliActive]);
 
   // Live timer interval to tick countdowns and auto-prune expired Chugli sessions every second
   useEffect(() => {
@@ -165,10 +418,34 @@ export default function GroupsTabScreen() {
 
     let isMounted = true;
 
+    // 1. Immediately hydrate from local persistent cache (0ms instant render)
+    Promise.all([
+      mobileCache.getCachedGroups(currentUser.id),
+      mobileCache.getCachedInvitations(currentUser.id),
+      mobileCache.getCachedMessages(currentUser.id),
+      mobileCache.getCachedUsers(),
+    ]).then(([cachedGroups, cachedInvites, cachedMessages, cachedUsers]) => {
+      if (!isMounted) return;
+      if (cachedGroups && cachedGroups.length > 0) {
+        setGroups(cachedGroups);
+        setLoadingGroups(false);
+      }
+      if (cachedInvites && cachedInvites.length > 0) {
+        setPendingInvitations(cachedInvites);
+      }
+      if (cachedMessages && cachedMessages.length > 0) {
+        setMessages(cachedMessages);
+      }
+      if (cachedUsers && cachedUsers.length > 0) {
+        setRegisteredUsers(cachedUsers);
+      }
+    });
+
+    // 2. Fetch latest data from server in background (Stale-While-Revalidate)
     Promise.all([
       fetchGroups(currentUser.id),
       fetchUserInvitations(currentUser.id),
-      fetchMessageHistory(),
+      fetchMessageHistory({ currentUserId: currentUser.id }),
       fetchAllUsers(),
     ])
       .then(([loadedGroups, loadedInvites, loadedMessages, users]) => {
@@ -178,11 +455,16 @@ export default function GroupsTabScreen() {
         setMessages(loadedMessages);
         setRegisteredUsers(users);
         setLoadingGroups(false);
+
+        // Update persistent cache
+        mobileCache.setCachedGroups(currentUser.id, loadedGroups);
+        mobileCache.setCachedInvitations(currentUser.id, loadedInvites);
+        mobileCache.setCachedMessages(currentUser.id, loadedMessages);
+        mobileCache.setCachedUsers(users);
       })
       .catch((err) => {
         if (!isMounted) return;
         console.warn("Error loading groups & invites:", err.message);
-        setBannerError("Unable to load latest groups and invitations.");
         setLoadingGroups(false);
       });
 
@@ -217,8 +499,47 @@ export default function GroupsTabScreen() {
     const unsubMessages = socketService.subscribeToMessages((newMsg) => {
       if (!isMounted) return;
       setMessages((prev) => {
+        // If message already exists by id, ignore duplicate
         if (prev.some((m) => m.id === newMsg.id)) return prev;
-        return [...prev, newMsg];
+
+        // If this matches an optimistic pending message via clientTempId, replace in-place
+        if (newMsg.clientTempId) {
+          const tempIdx = prev.findIndex((m) => m.id === newMsg.clientTempId);
+          if (tempIdx !== -1) {
+            const next = [...prev];
+            next[tempIdx] = {
+              ...newMsg,
+              imageUrl: next[tempIdx].imageUrl || newMsg.imageUrl,
+              isUploading: false,
+            };
+            mobileCache.setCachedMessages(currentUser.id, next);
+            return next;
+          }
+        }
+
+        // If sender is current user and we have a pending uploading message in this group, replace it
+        if (currentUser && newMsg.senderId === currentUser.id && newMsg.imageUrl) {
+          const pendingIdx = prev.findIndex(
+            (m) =>
+              m.isUploading &&
+              m.senderId === newMsg.senderId &&
+              m.groupId === newMsg.groupId
+          );
+          if (pendingIdx !== -1) {
+            const next = [...prev];
+            next[pendingIdx] = {
+              ...newMsg,
+              imageUrl: next[pendingIdx].imageUrl || newMsg.imageUrl,
+              isUploading: false,
+            };
+            mobileCache.setCachedMessages(currentUser.id, next);
+            return next;
+          }
+        }
+
+        const next = [...prev, newMsg];
+        mobileCache.setCachedMessages(currentUser.id, next);
+        return next;
       });
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
@@ -230,12 +551,15 @@ export default function GroupsTabScreen() {
       if (!isMounted) return;
       setGroups((prev) => {
         const index = prev.findIndex((g) => g.id === group.id);
+        let updated: GroupChat[];
         if (index >= 0) {
-          const updated = [...prev];
+          updated = [...prev];
           updated[index] = group;
-          return updated;
+        } else {
+          updated = [group, ...prev];
         }
-        return [group, ...prev];
+        mobileCache.setCachedGroups(currentUser.id, updated);
+        return updated;
       });
 
       setActiveGroup((current) => (current && current.id === group.id ? group : current));
@@ -247,7 +571,9 @@ export default function GroupsTabScreen() {
       if (invitation.senderId === currentUser.id) return; // ignore self-sent
       setPendingInvitations((prev) => {
         if (prev.some((i) => i.id === invitation.id)) return prev;
-        return [invitation, ...prev];
+        const next = [invitation, ...prev];
+        mobileCache.setCachedInvitations(currentUser.id, next);
+        return next;
       });
       setBannerSuccess(`You received an invitation to join "${invitation.groupName}"!`);
       setTimeout(() => setBannerSuccess(null), 4500);
@@ -264,9 +590,11 @@ export default function GroupsTabScreen() {
     // Real-time Chugli session extended
     const unsubExtended = socketService.subscribeToChugliExtended((data) => {
       if (!isMounted) return;
-      setGroups((prev) =>
-        prev.map((g) => (g.id === data.group.id ? data.group : g))
-      );
+      setGroups((prev) => {
+        const next = prev.map((g) => (g.id === data.group.id ? data.group : g));
+        mobileCache.setCachedGroups(currentUser.id, next);
+        return next;
+      });
       setActiveGroup((curr) =>
         curr && curr.id === data.group.id ? data.group : curr
       );
@@ -278,7 +606,11 @@ export default function GroupsTabScreen() {
     // Real-time Chugli session expired & deleted
     const unsubExpired = socketService.subscribeToChugliExpired((data) => {
       if (!isMounted) return;
-      setGroups((prev) => prev.filter((g) => g.id !== data.groupId));
+      setGroups((prev) => {
+        const next = prev.filter((g) => g.id !== data.groupId);
+        mobileCache.setCachedGroups(currentUser.id, next);
+        return next;
+      });
       setActiveGroup((curr) => {
         if (curr && curr.id === data.groupId) {
           setBannerError(`💥 Chugli group "${data.groupName}" time expired and self-destructed.`);
@@ -293,11 +625,15 @@ export default function GroupsTabScreen() {
       if (!isMounted) return;
       if (data.deleteFor === "me") {
         if (data.deletedByUserId === currentUser.id) {
-          setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
+          setMessages((prev) => {
+            const next = prev.filter((m) => m.id !== data.messageId);
+            mobileCache.setCachedMessages(currentUser.id, next);
+            return next;
+          });
         }
       } else {
-        setMessages((prev) =>
-          prev.map((m) =>
+        setMessages((prev) => {
+          const next = prev.map((m) =>
             m.id === data.messageId
               ? {
                   ...m,
@@ -306,20 +642,94 @@ export default function GroupsTabScreen() {
                   deletedByUsername: data.deletedByUsername || "user",
                 }
               : m
-          )
-        );
+          );
+          mobileCache.setCachedMessages(currentUser.id, next);
+          return next;
+        });
       }
     });
 
     const unsubEdited = socketService.subscribeToMessageEdited((data) => {
       if (!isMounted) return;
-      setMessages((prev) =>
-        prev.map((m) =>
+      setMessages((prev) => {
+        const next = prev.map((m) =>
           m.id === data.messageId
             ? { ...m, text: data.text, isEdited: true, editedAt: data.editedAt }
             : m
-        )
-      );
+        );
+        mobileCache.setCachedMessages(currentUser.id, next);
+        return next;
+      });
+    });
+
+    const unsubViewOnce = socketService.subscribeToViewOnceOpened((data) => {
+      if (!isMounted) return;
+      setMessages((prev) => {
+        const next = prev.map((m) =>
+          m.id === data.messageId
+            ? {
+                ...m,
+                isViewed: true,
+                imageUrl: undefined,
+                viewedAt: data.viewedAt,
+                viewedByUserId: data.userId,
+              }
+            : m
+        );
+        mobileCache.setCachedMessages(currentUser.id, next);
+        return next;
+      });
+    });
+
+    // Real-time group deleted by admin (regular or Chugli group)
+    const unsubGroupDeleted = socketService.subscribeToGroupDeleted((data) => {
+      if (!isMounted) return;
+      setGroups((prev) => {
+        const next = prev.filter((g) => g.id !== data.groupId);
+        mobileCache.setCachedGroups(currentUser.id, next);
+        return next;
+      });
+      setActiveGroup((curr) => {
+        if (curr && curr.id === data.groupId) {
+          setShowMembersModal(false);
+          setShowInviteModal(false);
+          setShowWarningModal(false);
+          setShowDeleteConfirmModal(false);
+          setBannerSuccess(`Group "${data.groupName}" was deleted by an admin.`);
+          setTimeout(() => setBannerSuccess(null), 4000);
+          return null;
+        }
+        return curr;
+      });
+    });
+
+    // Real-time group member left
+    const unsubMemberLeft = socketService.subscribeToGroupMemberLeft((data) => {
+      if (!isMounted) return;
+      if (data.userId === currentUser.id) {
+        setGroups((prev) => {
+          const next = prev.filter((g) => g.id !== data.groupId);
+          mobileCache.setCachedGroups(currentUser.id, next);
+          return next;
+        });
+        setActiveGroup((curr) => (curr && curr.id === data.groupId ? null : curr));
+        setShowMembersModal(false);
+      } else {
+        fetchGroups(currentUser.id)
+          .then((fresh) => {
+            if (!isMounted) return;
+            setGroups(fresh);
+            mobileCache.setCachedGroups(currentUser.id, fresh);
+            setActiveGroup((curr) => {
+              if (curr && curr.id === data.groupId) {
+                const matched = fresh.find((g) => g.id === data.groupId);
+                return matched || curr;
+              }
+              return curr;
+            });
+          })
+          .catch(() => {});
+      }
     });
 
     return () => {
@@ -331,10 +741,13 @@ export default function GroupsTabScreen() {
       unsubDeleted();
       unsubEdited();
       unsubGroups();
+      unsubGroupDeleted();
+      unsubMemberLeft();
       unsubInvitations();
       unsubWarning();
       unsubExtended();
       unsubExpired();
+      unsubViewOnce();
     };
   }, [currentUser, setRegisteredUsers]);
 
@@ -362,12 +775,14 @@ export default function GroupsTabScreen() {
 
     let isCurrent = true;
 
-    fetchMessageHistory({ groupId: activeGroup.id })
+    fetchMessageHistory({ groupId: activeGroup.id, currentUserId: currentUser.id })
       .then((history) => {
         if (!isCurrent) return;
         setMessages((prev) => {
           const others = prev.filter((m) => m.groupId !== activeGroup.id);
-          return [...others, ...history];
+          const next = [...others, ...history];
+          mobileCache.setCachedMessages(currentUser.id, next);
+          return next;
         });
       })
       .catch((err) => {
@@ -389,6 +804,99 @@ export default function GroupsTabScreen() {
     } catch (err: any) {
       setBannerError(err.message || "Failed to deliver group message.");
       throw err;
+    }
+  };
+
+  // Handle Send Photo to Group (Background Upload with Immediate Optimistic Display)
+  const handleSendGroupPhoto = async (data: {
+    localUri: string;
+    base64?: string | null;
+    isViewOnce: boolean;
+    caption: string;
+  }) => {
+    if (!activeGroup || !currentUser) return;
+
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const nowIso = new Date().toISOString();
+
+    // 1. Immediately show local preview in chat bubble with upload indicator
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderUsername: currentUser.username,
+      groupId: activeGroup.id,
+      text: data.caption || (data.isViewOnce ? "Photo" : ""),
+      imageUrl: data.localUri,
+      isViewOnce: data.isViewOnce,
+      isViewed: false,
+      reads: [],
+      createdAt: nowIso,
+      isUploading: true,
+    };
+
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 60);
+
+    // 2. Perform fast background Cloudinary upload & socket delivery
+    (async () => {
+      try {
+        const dataUri = data.base64
+          ? `data:image/jpeg;base64,${data.base64}`
+          : data.localUri;
+
+        const uploadRes = await uploadImageApi(dataUri, "chatapp/view_once");
+
+        const confirmedMsg = await socketService.sendMessage(data.caption || "Photo", {
+          groupId: activeGroup.id,
+          imageUrl: uploadRes.url,
+          imagePublicId: uploadRes.publicId,
+          isViewOnce: data.isViewOnce,
+          clientTempId: tempId,
+        });
+
+        // 3. Mark upload as complete and ensure no duplicate entries
+        setMessages((prev) => {
+          const alreadyHasConfirmed = prev.some((m) => m.id === confirmedMsg.id);
+          if (alreadyHasConfirmed) {
+            return prev.filter((m) => m.id !== tempId);
+          }
+          return prev.map((m) =>
+            m.id === tempId
+              ? {
+                  ...confirmedMsg,
+                  imageUrl: confirmedMsg.imageUrl || data.localUri,
+                  isUploading: false,
+                }
+              : m
+          );
+        });
+      } catch (err: any) {
+        console.error("Background group photo upload failed:", err);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setBannerError(err?.message || "Failed to upload photo to group.");
+      }
+    })();
+  };
+
+  // Open View-Once Photo in Group
+  const handleOpenViewOnce = async (message: ChatMessage) => {
+    try {
+      setBannerError(null);
+      const secureUrl = await socketService.openViewOnceMessage(message.id);
+      let senderName = message.senderName || "Photo";
+      if (activeGroup?.isChugli) {
+        const member = activeGroup.members?.find((m) => m.userId === message.senderId);
+        senderName = member?.anonymousAlias || "Secret Member";
+      }
+      setActiveViewOnce({
+        url: secureUrl,
+        senderName,
+      });
+    } catch (err: any) {
+      setBannerError(err.message || "Unable to view photo. It may have expired.");
     }
   };
 
@@ -726,6 +1234,116 @@ export default function GroupsTabScreen() {
     }
   };
 
+  // Prompt Admin to Delete Group
+  const promptDeleteGroup = (group: GroupChat) => {
+    setGroupToDelete(group);
+    setShowDeleteConfirmModal(true);
+  };
+
+  // Perform permanent Group Deletion (Admin only)
+  const handleConfirmDeleteGroup = async () => {
+    if (!groupToDelete || !currentUser) return;
+    try {
+      setDeletingGroup(true);
+      setBannerError(null);
+
+      try {
+        await socketService.deleteGroup({
+          groupId: groupToDelete.id,
+          userId: currentUser.id,
+        });
+      } catch {
+        // Fallback to REST API
+        await deleteGroup(groupToDelete.id, currentUser.id);
+      }
+
+      setGroups((prev) => prev.filter((g) => g.id !== groupToDelete.id));
+      if (activeGroup?.id === groupToDelete.id) {
+        setActiveGroup(null);
+      }
+      setShowDeleteConfirmModal(false);
+      setShowMembersModal(false);
+      setShowWarningModal(false);
+      setBannerSuccess(`Group "${groupToDelete.name}" was successfully deleted.`);
+      setGroupToDelete(null);
+      setTimeout(() => setBannerSuccess(null), 4000);
+    } catch (err: any) {
+      setBannerError(err.message || "Failed to delete group.");
+    } finally {
+      setDeletingGroup(false);
+    }
+  };
+
+  // Clear Chat History for Current User in Active Group
+  const handleClearChat = async () => {
+    if (!activeGroup || !currentUser) return;
+    try {
+      setIsClearingChat(true);
+      setBannerError(null);
+      await clearChatApi({
+        currentUserId: currentUser.id,
+        groupId: activeGroup.id,
+      });
+
+      // Optimistically hide cleared messages locally for current user
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.groupId === activeGroup.id
+            ? {
+                ...m,
+                deletedForUserIds: [...(m.deletedForUserIds || []), currentUser.id],
+              }
+            : m
+        )
+      );
+
+      setShowClearConfirmModal(false);
+      setShowGroupOptionsMenu(false);
+      setShowMembersModal(false);
+      setBannerSuccess(`Cleared chat history in #${activeGroup.name}.`);
+      setTimeout(() => setBannerSuccess(null), 3500);
+    } catch (err: any) {
+      setBannerError(err.message || "Failed to clear chat history.");
+    } finally {
+      setIsClearingChat(false);
+    }
+  };
+
+  // Perform Exit Group (Leave Group)
+  const handleConfirmExitGroup = async () => {
+    if (!activeGroup || !currentUser) return;
+    try {
+      setIsExitingGroup(true);
+      setBannerError(null);
+
+      const targetGroupId = activeGroup.id;
+      const targetGroupName = activeGroup.name;
+
+      try {
+        await socketService.leaveGroup({
+          groupId: targetGroupId,
+          userId: currentUser.id,
+        });
+      } catch {
+        // Fallback to REST API
+        await leaveGroup(targetGroupId, currentUser.id);
+      }
+
+      // Remove from my groups list and close active chat
+      setGroups((prev) => prev.filter((g) => g.id !== targetGroupId));
+      setActiveGroup(null);
+      setShowExitConfirmModal(false);
+      setShowGroupOptionsMenu(false);
+      setShowMembersModal(false);
+      setBannerSuccess(`You exited "${targetGroupName}".`);
+      setTimeout(() => setBannerSuccess(null), 4000);
+    } catch (err: any) {
+      setBannerError(err.message || "Failed to exit group.");
+    } finally {
+      setIsExitingGroup(false);
+    }
+  };
+
   // Handle Respond to Invitation (Accept or Decline)
   const handleRespondInvitation = async (
     invitation: GroupInvitationInfo,
@@ -810,9 +1428,12 @@ export default function GroupsTabScreen() {
     );
   });
 
-  // Messages in active group
+  // Messages in active group (with deduplication and clear chat filter)
   const groupMessages = activeGroup
-    ? messages.filter((m) => m.groupId === activeGroup.id)
+    ? messages
+        .filter((m) => m.groupId === activeGroup.id)
+        .filter((m) => !m.deletedForUserIds?.includes(currentUser.id))
+        .filter((m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx)
     : [];
 
   // Active Group Chugli helpers
@@ -822,20 +1443,36 @@ export default function GroupsTabScreen() {
   const myChugliMember = activeGroup?.members.find((m) => m.userId === currentUser.id);
   const myChugliAlias = myChugliMember?.anonymousAlias || "Anonymous";
 
+  // Check if current user is an admin or creator of the active group
+  const isActiveGroupAdmin =
+    Boolean(activeGroup && currentUser && (
+      activeGroup.createdById === currentUser.id ||
+      activeGroup.members?.some((m) => m.userId === currentUser.id && m.role === "admin")
+    ));
+
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={activeGroup ? ["top", "bottom"] : ["top"]}>
       {/* View 1: Active Group Chat Room */}
       {activeGroup ? (
-        <View style={styles.flexContainer}>
+        <View
+          style={[
+            styles.flexContainer,
+            { backgroundColor: colors.background },
+            activeGroup.isChugli && Platform.OS === "web"
+              ? ({ userSelect: "none", WebkitUserSelect: "none" } as any)
+              : null,
+          ]}
+        >
           {/* Group Chat Header */}
-          <View style={styles.groupHeader}>
+          <View style={[styles.groupHeader, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
             <TouchableOpacity
               style={styles.backBtn}
               onPress={() => setActiveGroup(null)}
               activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityLabel="Back to groups"
             >
-              <Ionicons name="arrow-back" size={20} color="#0F172A" />
-              <Text style={styles.backBtnText}>Groups</Text>
+              <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -853,43 +1490,67 @@ export default function GroupsTabScreen() {
                   {activeGroup.isChugli ? "🤫" : activeGroup.name.charAt(0).toUpperCase()}
                 </Text>
               </View>
-              <View>
+              <View style={styles.groupHeaderTextWrapper}>
                 <View style={styles.groupTitleRow}>
-                  <Text style={styles.groupHeaderTitle} numberOfLines={1}>
+                  <Text style={[styles.groupHeaderTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]} numberOfLines={1} ellipsizeMode="tail">
                     {activeGroup.name}
                   </Text>
                   {activeGroup.isChugli ? (
                     <View style={styles.chugliHeaderBadge}>
-                      <Text style={styles.chugliHeaderBadgeText}>🤫 Chugli</Text>
+                      <Ionicons name="shield-checkmark" size={10} color="#7C3AED" />
+                      <Text style={styles.chugliHeaderBadgeText}>Secret</Text>
                     </View>
                   ) : null}
                 </View>
-                <Text style={styles.groupHeaderSub}>
+                <Text style={[styles.groupHeaderSub, { color: colors.textSecondary }]} numberOfLines={1} ellipsizeMode="tail">
                   {activeGroup.isChugli
-                    ? `🕵️ Anonymous room • ${activeGroup.members.length} members`
+                    ? `🕵️ Anonymous • 🚫 No Screenshots`
                     : `👥 ${activeGroup.members.length} members • Tap for details`}
                 </Text>
               </View>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.inviteHeaderBtn}
-              onPress={() => setShowInviteModal(true)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add" size={16} color="#2563EB" />
-              <Text style={styles.inviteHeaderBtnText}>Invite</Text>
-            </TouchableOpacity>
+            <View style={styles.groupHeaderRightActions}>
+              <ThemeNavButton />
+              <TouchableOpacity
+                style={[styles.headerIconBtn, { backgroundColor: isDark ? colors.surfaceElevated : "#F1F5F9", borderColor: colors.border }]}
+                onPress={() => setShowInviteModal(true)}
+                activeOpacity={0.75}
+                accessibilityLabel="Invite members"
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="person-add-outline" size={17} color={colors.primary} />
+              </TouchableOpacity>
+
+              {isActiveGroupAdmin ? (
+                <TouchableOpacity
+                  style={[styles.headerIconBtn, styles.headerDeleteIconBtn]}
+                  onPress={() => promptDeleteGroup(activeGroup)}
+                  activeOpacity={0.75}
+                  accessibilityLabel="Delete group"
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                </TouchableOpacity>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.headerIconBtn, { backgroundColor: isDark ? colors.surfaceElevated : "#F1F5F9", borderColor: colors.border }]}
+                onPress={() => setShowGroupOptionsMenu(true)}
+                activeOpacity={0.75}
+                accessibilityLabel="Group options"
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Chugli Live Banner (Active Countdown & Secret Alias) */}
           {activeGroup.isChugli ? (
             <View style={styles.chugliTopBanner}>
-              <View style={styles.chugliBannerLeft}>
-                <View style={styles.chugliPillBadge}>
-                  <Text style={styles.chugliPillEmoji}>🤫</Text>
-                  <Text style={styles.chugliPillText}>Chugli Group</Text>
-                </View>
+              {/* Row 1: Session Timer & Controls */}
+              <View style={styles.chugliBannerRow}>
                 <View
                   style={[
                     styles.countdownPill,
@@ -897,8 +1558,8 @@ export default function GroupsTabScreen() {
                   ]}
                 >
                   <Ionicons
-                    name={activeChugliTimer?.isWarning ? "alert-circle" : "time-outline"}
-                    size={14}
+                    name={activeChugliTimer?.isWarning ? "alert-circle" : "time"}
+                    size={13}
                     color={activeChugliTimer?.isWarning ? "#DC2626" : "#7C3AED"}
                   />
                   <Text
@@ -908,28 +1569,10 @@ export default function GroupsTabScreen() {
                     ]}
                   >
                     {activeChugliTimer?.isExpired
-                      ? "Expired"
-                      : `Ends in ${activeChugliTimer?.text}`}
+                      ? "Session Expired"
+                      : `Self-destructs in ${activeChugliTimer?.text || "..."}`}
                   </Text>
                 </View>
-              </View>
-
-              <View style={styles.chugliBannerRight}>
-                <TouchableOpacity
-                  style={styles.aliasDisplayPill}
-                  onPress={() => {
-                    setTargetChugliGroup(activeGroup);
-                    setTargetChugliInvite(null);
-                    setMyAliasInput(myChugliAlias);
-                    setShowAliasModal(true);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.aliasDisplayLabel}>You:</Text>
-                  <Text style={styles.aliasDisplayText} numberOfLines={1}>
-                    🕵️ {myChugliAlias}
-                  </Text>
-                </TouchableOpacity>
 
                 {activeGroup.createdById === currentUser.id ? (
                   <View style={styles.adminActionGroup}>
@@ -945,21 +1588,54 @@ export default function GroupsTabScreen() {
                         setShowWarningModal(true);
                       }}
                       activeOpacity={0.8}
+                      accessibilityLabel="Extend session"
                     >
-                      <Ionicons name="time" size={13} color="#FFFFFF" />
-                      <Text style={styles.extendBannerBtnText}>Extend</Text>
+                      <Ionicons name="add-circle" size={13} color="#FFFFFF" />
+                      <Text style={styles.extendBannerBtnText}>+10m</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.endBannerBtn}
                       onPress={() => handleEndChugli(activeGroup.id)}
                       activeOpacity={0.8}
+                      accessibilityLabel="End session"
                     >
-                      <Ionicons name="stop-circle-outline" size={13} color="#EF4444" />
+                      <Ionicons name="stop-circle" size={13} color="#DC2626" />
                       <Text style={styles.endBannerBtnText}>End</Text>
                     </TouchableOpacity>
                   </View>
-                ) : null}
+                ) : (
+                  <View style={styles.chugliStatusPill}>
+                    <View style={styles.chugliStatusDot} />
+                    <Text style={styles.chugliStatusText}>Live Room</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Row 2: Secret Identity & Screenshot Shield */}
+              <View style={[styles.chugliBannerRow, styles.chugliBannerRowSecondary]}>
+                <TouchableOpacity
+                  style={styles.aliasDisplayPill}
+                  onPress={() => {
+                    setTargetChugliGroup(activeGroup);
+                    setTargetChugliInvite(null);
+                    setMyAliasInput(myChugliAlias);
+                    setShowAliasModal(true);
+                  }}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Edit secret alias"
+                >
+                  <Text style={styles.aliasDisplayLabel}>Secret Identity:</Text>
+                  <Text style={styles.aliasDisplayText} numberOfLines={1} ellipsizeMode="tail">
+                    🕵️ {myChugliAlias}
+                  </Text>
+                  <Ionicons name="pencil" size={10} color="#7C3AED" />
+                </TouchableOpacity>
+
+                <View style={styles.chugliSecurityBadge}>
+                  <Ionicons name="shield-checkmark" size={12} color="#059669" />
+                  <Text style={styles.chugliSecurityText}>No Screenshots</Text>
+                </View>
               </View>
             </View>
           ) : null}
@@ -979,6 +1655,14 @@ export default function GroupsTabScreen() {
             <View style={styles.successBanner}>
               <Ionicons name="checkmark-circle" size={16} color="#166534" />
               <Text style={styles.successBannerText}>{bannerSuccess}</Text>
+              <TouchableOpacity
+                onPress={() => setBannerSuccess(null)}
+                style={styles.bannerDismissBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Dismiss banner"
+              >
+                <Ionicons name="close" size={15} color="#166534" />
+              </TouchableOpacity>
             </View>
           ) : null}
 
@@ -997,6 +1681,38 @@ export default function GroupsTabScreen() {
             behavior={Platform.OS === "ios" ? "padding" : undefined}
             keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
           >
+            {/* Subtle Background Confidential Watermark */}
+            {activeGroup.isChugli && (
+              <View style={styles.chugliWatermarkOverlay} pointerEvents="none">
+                {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+                  <View key={i} style={styles.chugliWatermarkLine}>
+                    <Text style={styles.chugliWatermarkLineText}>
+                      🤫 CHUGLI SECRET CHAT • CONFIDENTIAL • SCREENSHOTS PROHIBITED
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Web Inactive Window / Snipping Tool Privacy Shield */}
+            {activeGroup.isChugli && isWindowBlurred && (
+              <View style={styles.windowBlurPrivacyShield}>
+                <View style={styles.privacyShieldCard}>
+                  <View style={styles.privacyShieldIcon}>
+                    <Ionicons name="shield-checkmark" size={40} color="#7C3AED" />
+                  </View>
+                  <Text style={styles.privacyShieldTitle}>Chugli Secret Chat Protected</Text>
+                  <Text style={styles.privacyShieldText}>
+                    Screen contents are hidden while the window is inactive to block screenshots and external snipping tools.
+                  </Text>
+                  <View style={styles.privacyShieldPrompt}>
+                    <Ionicons name="hand-right" size={14} color="#7C3AED" />
+                    <Text style={styles.privacyShieldPromptText}>Click anywhere to resume chat</Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
             <FlatList
               ref={flatListRef}
               data={groupMessages}
@@ -1011,6 +1727,8 @@ export default function GroupsTabScreen() {
                   isChugli={activeGroup.isChugli}
                   onDelete={handleDeleteMessage}
                   onEdit={handleEditMessage}
+                  onOpenViewOnce={handleOpenViewOnce}
+                  onPressImage={(url) => setExpandedImage({ url, caption: item.text })}
                 />
               )}
               contentContainerStyle={[
@@ -1041,6 +1759,7 @@ export default function GroupsTabScreen() {
             {/* Group Message Input */}
             <ChatInput
               onSend={handleSendGroupMessage}
+              onPressCamera={() => setShowPhotoPicker(true)}
               disabled={connectionStatus !== "connected"}
               placeholder={
                 activeGroup.isChugli
@@ -1052,25 +1771,27 @@ export default function GroupsTabScreen() {
         </View>
       ) : (
         /* View 2: Groups Hub & Directory */
-        <View style={styles.flexContainer}>
+        <View style={[styles.flexContainer, { backgroundColor: colors.background }]}>
           {/* Top Header */}
-          <View style={styles.header}>
+          <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
             <View style={styles.headerLeft}>
-              <View style={styles.appIconBadge}>
-                <Ionicons name="people" size={20} color="#2563EB" />
+              <View style={[styles.appIconBadge, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="people" size={20} color={colors.primary} />
               </View>
-              <View>
-                <Text style={styles.headerTitle}>Groups</Text>
-                <Text style={styles.headerSubtitle}>
+              <View style={styles.headerTitleWrap}>
+                <Text style={[styles.headerTitle, { color: colors.textPrimary }]} numberOfLines={1}>Groups</Text>
+                <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
                   Chat & invite teammates
                 </Text>
               </View>
             </View>
 
-            {/* Top Bar Action Buttons: 🤫 Chugli and + New Group */}
+            {/* Top Bar Action Buttons: ☀️/🌙 Theme, 🔒 Lock, 🤫 Chugli and + New Group */}
             <View style={styles.headerActionBtns}>
+              <ThemeNavButton />
+              <LockNavButton compact={true} />
               <TouchableOpacity
-                style={styles.headerChugliBtn}
+                style={[styles.headerChugliBtn, isDark && { backgroundColor: "#1F1B38", borderColor: "#3B2D6B" }]}
                 onPress={handleOpenChugliModal}
                 activeOpacity={0.8}
                 accessibilityLabel="Open Chugli Modal"
@@ -1080,30 +1801,30 @@ export default function GroupsTabScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.headerCreateBtn}
+                style={[styles.headerCreateBtn, { backgroundColor: colors.primary }]}
                 onPress={() => setShowCreateModal(true)}
                 activeOpacity={0.8}
                 accessibilityLabel="Create New Group"
               >
                 <Ionicons name="add" size={16} color="#FFFFFF" />
-                <Text style={styles.headerCreateBtnText}>New Group</Text>
+                <Text style={styles.headerCreateBtnText}>New</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {/* Search Groups */}
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={16} color="#94A3B8" style={styles.searchIcon} />
+          <View style={[styles.searchContainer, { backgroundColor: isDark ? colors.surfaceElevated : colors.card, borderColor: colors.border }]}>
+            <Ionicons name="search" size={16} color={colors.textMuted} style={styles.searchIcon} />
             <TextInput
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: colors.textPrimary }]}
               placeholder="Search my groups..."
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor={colors.textMuted}
               value={groupSearchQuery}
               onChangeText={setGroupSearchQuery}
             />
             {groupSearchQuery.length > 0 ? (
               <TouchableOpacity onPress={() => setGroupSearchQuery("")}>
-                <Ionicons name="close-circle" size={16} color="#94A3B8" />
+                <Ionicons name="close-circle" size={16} color={colors.textMuted} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -1219,10 +1940,17 @@ export default function GroupsTabScreen() {
                 ).length;
                 const isChugli = Boolean(item.isChugli);
                 const countdown = isChugli ? formatCountdown(item.expiresAt) : null;
+                const isGroupAdmin =
+                  item.createdById === currentUser.id ||
+                  item.members.some((m) => m.userId === currentUser.id && m.role === "admin");
 
                 return (
                   <TouchableOpacity
-                    style={[styles.groupCard, isChugli && styles.groupCardChugli]}
+                    style={[
+                      styles.groupCard,
+                      { backgroundColor: colors.card, borderColor: colors.border },
+                      isChugli && styles.groupCardChugli,
+                    ]}
                     onPress={() => handleSelectGroup(item)}
                     activeOpacity={0.7}
                   >
@@ -1245,7 +1973,7 @@ export default function GroupsTabScreen() {
                     <View style={styles.groupInfo}>
                       <View style={styles.groupTopRow}>
                         <View style={styles.groupCardNameRow}>
-                          <Text style={styles.groupName} numberOfLines={1}>
+                          <Text style={[styles.groupName, { color: colors.textPrimary, fontFamily: Fonts.bold }]} numberOfLines={1}>
                             {item.name}
                           </Text>
                           {isChugli ? (
@@ -1255,62 +1983,84 @@ export default function GroupsTabScreen() {
                           ) : null}
                         </View>
 
-                        {isChugli && countdown ? (
-                          <View
-                            style={[
-                              styles.timerCardBadge,
-                              countdown.isWarning && styles.timerCardBadgeWarning,
-                            ]}
-                          >
-                            <Ionicons
-                              name={countdown.isWarning ? "alert-circle" : "time-outline"}
-                              size={11}
-                              color={countdown.isWarning ? "#DC2626" : "#7C3AED"}
-                            />
-                            <Text
+                        <View style={styles.groupCardBadgesRight}>
+                          {isChugli && countdown ? (
+                            <View
                               style={[
-                                styles.timerCardBadgeText,
-                                countdown.isWarning && styles.timerCardBadgeTextWarning,
+                                styles.timerCardBadge,
+                                countdown.isWarning && styles.timerCardBadgeWarning,
                               ]}
                             >
-                              {countdown.isExpired ? "Expired" : `${countdown.text}`}
-                            </Text>
-                          </View>
-                        ) : (
-                          <View style={styles.membersBadge}>
-                            <Ionicons name="people" size={12} color="#2563EB" />
-                            <Text style={styles.membersBadgeText}>
-                              {item.members.length} members
-                            </Text>
-                          </View>
-                        )}
+                              <Ionicons
+                                name={countdown.isWarning ? "alert-circle" : "time-outline"}
+                                size={11}
+                                color={countdown.isWarning ? "#DC2626" : "#7C3AED"}
+                              />
+                              <Text
+                                style={[
+                                  styles.timerCardBadgeText,
+                                  countdown.isWarning && styles.timerCardBadgeTextWarning,
+                                ]}
+                              >
+                                {countdown.isExpired ? "Expired" : `${countdown.text}`}
+                              </Text>
+                            </View>
+                          ) : (
+                            <View style={[styles.membersBadge, isDark && { backgroundColor: "#1E2A4A" }]}>
+                              <Ionicons name="people" size={12} color={colors.primary} />
+                              <Text style={[styles.membersBadgeText, { color: colors.primary }]}>
+                                {item.members.length} members
+                              </Text>
+                            </View>
+                          )}
+
+                          {isGroupAdmin ? (
+                            <View style={styles.adminBadgeRow}>
+                              <View style={styles.adminCardBadge}>
+                                <Text style={styles.adminCardBadgeText}>👑 Admin</Text>
+                              </View>
+                              <TouchableOpacity
+                                style={styles.cardDeleteBtn}
+                                onPress={(e: any) => {
+                                  e?.stopPropagation?.();
+                                  promptDeleteGroup(item);
+                                }}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                activeOpacity={0.7}
+                                accessibilityLabel={`Delete ${item.name}`}
+                              >
+                                <Ionicons name="trash-outline" size={15} color="#EF4444" />
+                              </TouchableOpacity>
+                            </View>
+                          ) : null}
+                        </View>
                       </View>
 
                       {item.description ? (
-                        <Text style={styles.groupDesc} numberOfLines={1}>
+                        <Text style={[styles.groupDesc, { color: colors.textSecondary }]} numberOfLines={1}>
                           {item.description}
                         </Text>
                       ) : null}
 
                       <View style={styles.groupBottomRow}>
-                        <Text style={styles.groupLastMsg} numberOfLines={1}>
+                        <Text style={[styles.groupLastMsg, { color: colors.textSecondary }]} numberOfLines={1}>
                           {item.lastMessage || (isChugli ? "Secret chat • Tap to enter" : "No messages yet • Tap to chat")}
                         </Text>
-                        <Text style={styles.onlineMembersText}>
+                        <Text style={[styles.onlineMembersText, { color: colors.textMuted }]}>
                           🟢 {onlineCount} online
                         </Text>
                       </View>
                     </View>
 
-                    <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                   </TouchableOpacity>
                 );
               }}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
-                  <Ionicons name="people-outline" size={48} color="#CBD5E1" />
-                  <Text style={styles.emptyTitle}>No groups yet</Text>
-                  <Text style={styles.emptySub}>
+                  <Ionicons name="people-outline" size={48} color={colors.textMuted} />
+                  <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>No groups yet</Text>
+                  <Text style={[styles.emptySub, { color: colors.textSecondary }]}>
                     Create a group or start a secret Chugli session with your friends!
                   </Text>
                   <View style={styles.emptyBtnRow}>
@@ -1757,6 +2507,80 @@ export default function GroupsTabScreen() {
                     </View>
                   ))}
                 </View>
+              </View>
+            ) : null}
+
+            {/* Group Options: Clear Chat & Exit Group */}
+            {activeGroup && (
+              <View style={styles.groupModalActionsSection}>
+                <TouchableOpacity
+                  style={styles.groupModalActionRow}
+                  onPress={() => {
+                    setShowMembersModal(false);
+                    setShowClearConfirmModal(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.groupModalActionIcon, { backgroundColor: "#FEF3C7" }]}>
+                    <Ionicons name="trash-bin-outline" size={18} color="#D97706" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.groupModalActionTitle}>Clear Chat History</Text>
+                    <Text style={styles.groupModalActionDesc}>
+                      Delete messages in this group for your account
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.groupModalActionRow}
+                  onPress={() => {
+                    setShowMembersModal(false);
+                    setShowExitConfirmModal(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.groupModalActionIcon, { backgroundColor: "#FEE2E2" }]}>
+                    <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.groupModalActionTitle, { color: "#DC2626" }]}>Exit Group</Text>
+                    <Text style={styles.groupModalActionDesc}>
+                      Leave this group and stop receiving messages
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Danger Zone: Group Admin Controls */}
+            {isActiveGroupAdmin && activeGroup ? (
+              <View style={styles.dangerZoneCard}>
+                <View style={styles.dangerZoneHeader}>
+                  <View style={styles.dangerZoneIconBox}>
+                    <Ionicons name="warning" size={18} color="#DC2626" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.dangerZoneTitle}>Admin Controls</Text>
+                    <Text style={styles.dangerZoneSub}>Permanent Group Deletion</Text>
+                  </View>
+                </View>
+                <Text style={styles.dangerZoneDesc}>
+                  As a group admin, you can permanently delete this group. All messages, shared media, and memberships will be deleted immediately for everyone.
+                </Text>
+                <TouchableOpacity
+                  style={styles.deleteGroupActionBtn}
+                  onPress={() => {
+                    setShowMembersModal(false);
+                    promptDeleteGroup(activeGroup);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="trash" size={16} color="#FFFFFF" />
+                  <Text style={styles.deleteGroupActionBtnText}>Delete This Group</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
           </ScrollView>
@@ -2333,6 +3157,392 @@ export default function GroupsTabScreen() {
           </Animated.View>
         </View>
       </Modal>
+
+      {/* Photo Picker Modal (Camera / Gallery + View-Once toggle) */}
+      <PhotoPickerModal
+        visible={showPhotoPicker}
+        onClose={() => setShowPhotoPicker(false)}
+        onSendPhoto={handleSendGroupPhoto}
+      />
+
+      {/* View Once Photo Fullscreen Viewer */}
+      <ViewOncePhotoModal
+        visible={!!activeViewOnce}
+        imageUrl={activeViewOnce?.url}
+        senderName={activeViewOnce?.senderName}
+        onClose={() => setActiveViewOnce(null)}
+      />
+
+      {/* Standard Photo Full Window Zoom Viewer */}
+      <ImageViewerModal
+        visible={!!expandedImage}
+        imageUrl={expandedImage?.url}
+        caption={expandedImage?.caption}
+        onClose={() => setExpandedImage(null)}
+      />
+      {/* Screenshot Blocked Alert Notification */}
+      {showScreenshotBlockedAlert && (
+        <View style={styles.screenshotAlertContainer} pointerEvents="box-none">
+          <View style={styles.screenshotAlertCard}>
+            <View style={styles.screenshotAlertIconWrap}>
+              <Ionicons name="ban" size={20} color="#FFFFFF" />
+            </View>
+            <View style={styles.screenshotAlertContent}>
+              <Text style={styles.screenshotAlertTitle}>Screenshot Blocked!</Text>
+              <Text style={styles.screenshotAlertDesc}>
+                Screenshots & screen recordings are strictly disabled in Chugli Secret Chat.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.screenshotAlertDismissBtn}
+              onPress={() => setShowScreenshotBlockedAlert(false)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="close" size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* MODAL: Delete Group Confirmation (Admin) */}
+      <Modal
+        visible={showDeleteConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deletingGroup) {
+            setShowDeleteConfirmModal(false);
+            setGroupToDelete(null);
+          }
+        }}
+      >
+        <View style={styles.deleteModalBackdrop}>
+          <View style={styles.deleteModalCard}>
+            <View style={styles.deleteModalIconBox}>
+              <Ionicons name="trash" size={28} color="#DC2626" />
+            </View>
+
+            <Text style={styles.deleteModalTitle}>Delete Group?</Text>
+            <Text style={styles.deleteModalSubtitle}>
+              Are you sure you want to permanently delete{"\n"}
+              <Text style={styles.deleteModalGroupName}>{`"${groupToDelete?.name || ""}"`}</Text>?
+            </Text>
+
+            <View style={styles.deleteWarningBox}>
+              <Ionicons name="alert-circle" size={18} color="#B45309" />
+              <Text style={styles.deleteWarningBoxText}>
+                All conversations, shared media, and member connections will be removed permanently. This cannot be undone.
+              </Text>
+            </View>
+
+            <View style={styles.deleteModalActions}>
+              <TouchableOpacity
+                style={styles.deleteCancelBtn}
+                onPress={() => {
+                  if (!deletingGroup) {
+                    setShowDeleteConfirmModal(false);
+                    setGroupToDelete(null);
+                  }
+                }}
+                disabled={deletingGroup}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.deleteCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.deleteConfirmBtn}
+                onPress={handleConfirmDeleteGroup}
+                disabled={deletingGroup}
+                activeOpacity={0.8}
+              >
+                {deletingGroup ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="trash" size={16} color="#FFFFFF" />
+                    <Text style={styles.deleteConfirmBtnText}>Delete Group</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: Exit Group Confirmation */}
+      <Modal
+        visible={showExitConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isExitingGroup) {
+            setShowExitConfirmModal(false);
+          }
+        }}
+      >
+        <View style={styles.deleteModalBackdrop}>
+          <View style={styles.deleteModalCard}>
+            <View style={[styles.deleteModalIconBox, { backgroundColor: "#FEE2E2" }]}>
+              <Ionicons name="log-out" size={28} color="#DC2626" />
+            </View>
+
+            <Text style={styles.deleteModalTitle}>Exit Group?</Text>
+            <Text style={styles.deleteModalSubtitle}>
+              Are you sure you want to leave{"\n"}
+              <Text style={styles.deleteModalGroupName}>{`"${activeGroup?.name || ""}"`}</Text>?
+            </Text>
+
+            <View style={styles.deleteWarningBox}>
+              <Ionicons name="information-circle" size={18} color="#B45309" />
+              <Text style={styles.deleteWarningBoxText}>
+                {isActiveGroupAdmin
+                  ? "You are an admin. If you exit, admin rights will be transferred to another member. If you are the last member, the group will be deleted."
+                  : "You will no longer receive messages or be able to participate in this group unless someone re-invites you."}
+              </Text>
+            </View>
+
+            <View style={styles.deleteModalActions}>
+              <TouchableOpacity
+                style={styles.deleteCancelBtn}
+                onPress={() => {
+                  if (!isExitingGroup) {
+                    setShowExitConfirmModal(false);
+                  }
+                }}
+                disabled={isExitingGroup}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.deleteCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.deleteConfirmBtn, { backgroundColor: "#DC2626" }]}
+                onPress={handleConfirmExitGroup}
+                disabled={isExitingGroup}
+                activeOpacity={0.8}
+              >
+                {isExitingGroup ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="log-out-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.deleteConfirmBtnText}>Exit Group</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: Clear Group Chat Confirmation */}
+      <Modal
+        visible={showClearConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isClearingChat) {
+            setShowClearConfirmModal(false);
+          }
+        }}
+      >
+        <View style={styles.deleteModalBackdrop}>
+          <View style={styles.deleteModalCard}>
+            <View style={[styles.deleteModalIconBox, { backgroundColor: "#FEF3C7" }]}>
+              <Ionicons name="trash-bin" size={28} color="#D97706" />
+            </View>
+
+            <Text style={styles.deleteModalTitle}>Clear Chat?</Text>
+            <Text style={styles.deleteModalSubtitle}>
+              Are you sure you want to clear chat history in{"\n"}
+              <Text style={styles.deleteModalGroupName}>{`"${activeGroup?.name || ""}"`}</Text>?
+            </Text>
+
+            <View style={[styles.deleteWarningBox, { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" }]}>
+              <Ionicons name="information-circle" size={18} color="#2563EB" />
+              <Text style={[styles.deleteWarningBoxText, { color: "#1D4ED8" }]}>
+                This will delete messages in this group for your account. Other members will still see their messages.
+              </Text>
+            </View>
+
+            <View style={styles.deleteModalActions}>
+              <TouchableOpacity
+                style={styles.deleteCancelBtn}
+                onPress={() => {
+                  if (!isClearingChat) {
+                    setShowClearConfirmModal(false);
+                  }
+                }}
+                disabled={isClearingChat}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.deleteCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.deleteConfirmBtn, { backgroundColor: "#D97706" }]}
+                onPress={handleClearChat}
+                disabled={isClearingChat}
+                activeOpacity={0.8}
+              >
+                {isClearingChat ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="trash-bin-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.deleteConfirmBtnText}>Clear Messages</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: Group Chat Options Menu */}
+      <Modal
+        visible={showGroupOptionsMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowGroupOptionsMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.optionsModalBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowGroupOptionsMenu(false)}
+        >
+          <View style={styles.optionsModalCard}>
+            <View style={styles.optionsModalHeader}>
+              <View style={styles.optionsModalHeaderLeft}>
+                <View
+                  style={[
+                    styles.groupAvatarMini,
+                    activeGroup?.isChugli && styles.groupAvatarMiniChugli,
+                  ]}
+                >
+                  <Text style={styles.groupAvatarMiniText}>
+                    {activeGroup?.isChugli ? "🤫" : activeGroup?.name?.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.optionsModalTitle} numberOfLines={1}>
+                    {activeGroup?.name}
+                  </Text>
+                  <Text style={styles.optionsModalSub}>
+                    {activeGroup?.isChugli ? "Chugli Secret Chat" : `${activeGroup?.members.length || 0} members`}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowGroupOptionsMenu(false)}
+                style={styles.optionsCloseBtn}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.optionsMenuDivider} />
+
+            {/* Option 1: Group Details */}
+            <TouchableOpacity
+              style={styles.optionsMenuItem}
+              onPress={() => {
+                setShowGroupOptionsMenu(false);
+                setShowMembersModal(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#EFF6FF" }]}>
+                <Ionicons name="people-outline" size={18} color="#2563EB" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionsMenuItemTitle}>Group Details</Text>
+                <Text style={styles.optionsMenuItemSub}>View members & invitations</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            {/* Option 2: Invite Members */}
+            <TouchableOpacity
+              style={styles.optionsMenuItem}
+              onPress={() => {
+                setShowGroupOptionsMenu(false);
+                setShowInviteModal(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#F0FDF4" }]}>
+                <Ionicons name="person-add-outline" size={18} color="#16A34A" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionsMenuItemTitle}>Invite Members</Text>
+                <Text style={styles.optionsMenuItemSub}>Add more users to this group</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            {/* Option 3: Clear Chat */}
+            <TouchableOpacity
+              style={styles.optionsMenuItem}
+              onPress={() => {
+                setShowGroupOptionsMenu(false);
+                setShowClearConfirmModal(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#FEF3C7" }]}>
+                <Ionicons name="trash-bin-outline" size={18} color="#D97706" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.optionsMenuItemTitle, { color: "#D97706" }]}>Clear Chat</Text>
+                <Text style={styles.optionsMenuItemSub}>Delete messages for you</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            {/* Option 4: Exit Group */}
+            <TouchableOpacity
+              style={styles.optionsMenuItem}
+              onPress={() => {
+                setShowGroupOptionsMenu(false);
+                setShowExitConfirmModal(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#FEE2E2" }]}>
+                <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.optionsMenuItemTitle, { color: "#DC2626" }]}>Exit Group</Text>
+                <Text style={styles.optionsMenuItemSub}>Leave this conversation</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+
+            {/* Option 5: Delete Group (Admin only) */}
+            {isActiveGroupAdmin && activeGroup ? (
+              <TouchableOpacity
+                style={styles.optionsMenuItem}
+                onPress={() => {
+                  setShowGroupOptionsMenu(false);
+                  promptDeleteGroup(activeGroup);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.optionsMenuIconBox, { backgroundColor: "#7F1D1D" }]}>
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.optionsMenuItemTitle, { color: "#991B1B" }]}>Delete Group</Text>
+                  <Text style={styles.optionsMenuItemSub}>Permanent deletion for all members</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2340,11 +3550,11 @@ export default function GroupsTabScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "transparent",
   },
   flexContainer: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "transparent",
   },
   header: {
     flexDirection: "row",
@@ -2357,9 +3567,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   headerLeft: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 10,
+    marginRight: 8,
+    minWidth: 0,
+  },
+  headerTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   appIconBadge: {
     width: 38,
@@ -2368,6 +3585,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#EFF6FF",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   headerTitle: {
     fontSize: 18,
@@ -2378,26 +3596,26 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 12,
     color: "#64748B",
-    maxWidth: 180,
   },
   headerActionBtns: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
+    flexShrink: 0,
   },
   headerChugliBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
     backgroundColor: "#F5F3FF",
     borderWidth: 1,
     borderColor: "#DDD6FE",
-    paddingHorizontal: 11,
+    paddingHorizontal: 9,
     paddingVertical: 7,
-    borderRadius: 20,
+    borderRadius: 10,
   },
   headerChugliEmoji: {
-    fontSize: 14,
+    fontSize: 13,
   },
   headerChugliBtnText: {
     color: "#7C3AED",
@@ -2409,9 +3627,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     backgroundColor: "#2563EB",
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: 20,
+    borderRadius: 10,
     shadowColor: "#2563EB",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -2475,6 +3693,9 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#166534",
     flex: 1,
+  },
+  bannerDismissBtn: {
+    padding: 4,
   },
   loadingContainer: {
     flex: 1,
@@ -2698,53 +3919,85 @@ const styles = StyleSheet.create({
   groupHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
   },
   backBtn: {
-    flexDirection: "row",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
     alignItems: "center",
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 6,
-  },
-  backBtnText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#0F172A",
+    backgroundColor: "#F8FAFC",
   },
   groupHeaderInfo: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
     flex: 1,
+    minWidth: 0,
     marginHorizontal: 8,
   },
+  groupHeaderTextWrapper: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 8,
+    justifyContent: "center",
+  },
   groupAvatarMini: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 14,
     backgroundColor: "#EEF2FF",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   groupAvatarMiniText: {
     color: "#4F46E5",
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
   },
   groupHeaderTitle: {
     fontSize: 15,
     fontWeight: "800",
     color: "#0F172A",
+    flexShrink: 1,
   },
   groupHeaderSub: {
     fontSize: 11,
     color: "#64748B",
+    marginTop: 1,
+  },
+  groupHeaderActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  liveTranslateHeaderBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    height: 32,
+    paddingHorizontal: 9,
+    borderRadius: 16,
+    backgroundColor: "rgba(59, 130, 246, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(59, 130, 246, 0.25)",
+  },
+  liveTranslateHeaderBtnActive: {
+    backgroundColor: "#10B981",
+    borderColor: "#10B981",
+  },
+  liveTranslateHeaderText: {
+    fontSize: 11,
+    fontFamily: Fonts.bold,
+    color: Colors.primary,
+  },
+  liveTranslateHeaderTextActive: {
+    color: "#FFFFFF",
   },
   inviteHeaderBtn: {
     flexDirection: "row",
@@ -2777,7 +4030,7 @@ const styles = StyleSheet.create({
   },
   keyboardContainer: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "transparent",
   },
   listContent: {
     paddingVertical: 16,
@@ -3337,89 +4590,52 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // Active Chugli Top Sticky Banner
+  // Active Chugli Top Sticky Banner (2-row Mobile-first design)
   chugliTopBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     backgroundColor: "#FAF5FF",
     borderBottomWidth: 1.5,
     borderBottomColor: "#DDD6FE",
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 7,
   },
-  chugliBannerLeft: {
+  chugliBannerRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    flexShrink: 1,
+    justifyContent: "space-between",
   },
-  chugliPillBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#EDE9FE",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  chugliPillEmoji: {
-    fontSize: 12,
-  },
-  chugliPillText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#6D28D9",
+  chugliBannerRowSecondary: {
+    paddingTop: 1,
   },
   countdownPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 5,
     backgroundColor: "#FFFFFF",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: "#DDD6FE",
+    shadowColor: "#7C3AED",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
   },
   countdownPillWarning: {
     backgroundColor: "#FEF2F2",
     borderColor: "#FECACA",
+    shadowColor: "#DC2626",
   },
   countdownText: {
     fontSize: 11,
     fontWeight: "800",
     color: "#6D28D9",
+    letterSpacing: -0.1,
   },
   countdownTextWarning: {
     color: "#DC2626",
-  },
-  chugliBannerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  aliasDisplayPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#DDD6FE",
-  },
-  aliasDisplayLabel: {
-    fontSize: 10,
-    color: "#6B7280",
-    fontWeight: "600",
-  },
-  aliasDisplayText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#4B5563",
-    maxWidth: 100,
   },
   adminActionGroup: {
     flexDirection: "row",
@@ -3429,11 +4645,16 @@ const styles = StyleSheet.create({
   extendBannerBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
+    gap: 4,
     backgroundColor: "#7C3AED",
     paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingVertical: 4.5,
     borderRadius: 8,
+    shadowColor: "#7C3AED",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 1,
   },
   extendBannerBtnText: {
     color: "#FFFFFF",
@@ -3443,10 +4664,10 @@ const styles = StyleSheet.create({
   endBannerBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
+    gap: 4,
     backgroundColor: "#FEE2E2",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4.5,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "#FECACA",
@@ -3455,6 +4676,52 @@ const styles = StyleSheet.create({
     color: "#DC2626",
     fontSize: 11,
     fontWeight: "800",
+  },
+  chugliStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  chugliStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#10B981",
+  },
+  chugliStatusText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  aliasDisplayPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#DDD6FE",
+    flexShrink: 1,
+    maxWidth: "68%",
+  },
+  aliasDisplayLabel: {
+    fontSize: 10,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  aliasDisplayText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#374151",
+    flexShrink: 1,
   },
 
   // Active Group Header additions
@@ -3937,5 +5204,480 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#6B7280",
+  },
+  chugliSecurityBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  chugliSecurityText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  chugliWatermarkOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "space-around",
+    alignItems: "center",
+    zIndex: 0,
+    opacity: 0.05,
+    overflow: "hidden",
+  },
+  chugliWatermarkLine: {
+    transform: [{ rotate: "-22deg" }],
+    width: "150%",
+    alignItems: "center",
+  },
+  chugliWatermarkLineText: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#4C1D95",
+    letterSpacing: 2,
+    textAlign: "center",
+  },
+  windowBlurPrivacyShield: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(15, 23, 42, 0.94)",
+    zIndex: 999,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  privacyShieldCard: {
+    backgroundColor: "#1E293B",
+    borderRadius: 20,
+    padding: 28,
+    alignItems: "center",
+    maxWidth: 380,
+    borderWidth: 1,
+    borderColor: "#334155",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  privacyShieldIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "rgba(124, 58, 237, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  privacyShieldTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#F8FAFC",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  privacyShieldText: {
+    fontSize: 13,
+    color: "#94A3B8",
+    textAlign: "center",
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  privacyShieldPrompt: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(124, 58, 237, 0.2)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  privacyShieldPromptText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#C4B5FD",
+  },
+  screenshotAlertContainer: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 9999,
+    alignItems: "center",
+  },
+  screenshotAlertCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#DC2626",
+    borderRadius: 14,
+    padding: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+    width: "100%",
+    maxWidth: 420,
+  },
+  screenshotAlertIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  screenshotAlertContent: {
+    flex: 1,
+  },
+  screenshotAlertTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  screenshotAlertDesc: {
+    fontSize: 12,
+    color: "#FEE2E2",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  screenshotAlertDismissBtn: {
+    padding: 6,
+    marginLeft: 8,
+  },
+  groupHeaderRightActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+  },
+  headerIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerDeleteIconBtn: {
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
+  groupCardBadgesRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  adminBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  adminCardBadge: {
+    backgroundColor: "#FEF3C7",
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  adminCardBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#B45309",
+  },
+  cardDeleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#FEE2E2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dangerZoneCard: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+    marginTop: 24,
+    marginBottom: 20,
+  },
+  dangerZoneHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 8,
+  },
+  dangerZoneIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#FEE2E2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dangerZoneTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#991B1B",
+  },
+  dangerZoneSub: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#B91C1C",
+  },
+  dangerZoneDesc: {
+    fontSize: 12,
+    color: "#7F1D1D",
+    lineHeight: 17,
+    marginBottom: 14,
+  },
+  deleteGroupActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#DC2626",
+    paddingVertical: 10,
+    borderRadius: 10,
+    shadowColor: "#DC2626",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  deleteGroupActionBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  deleteModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  deleteModalCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 380,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  deleteModalIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#FEE2E2",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  deleteModalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 6,
+  },
+  deleteModalSubtitle: {
+    fontSize: 13,
+    color: "#475569",
+    textAlign: "center",
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  deleteModalGroupName: {
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  deleteWarningBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FFFBEB",
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    padding: 12,
+    borderRadius: 12,
+    width: "100%",
+    marginBottom: 20,
+  },
+  deleteWarningBoxText: {
+    flex: 1,
+    fontSize: 11,
+    color: "#92400E",
+    lineHeight: 16,
+    fontWeight: "500",
+  },
+  deleteModalActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    width: "100%",
+  },
+  deleteCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deleteCancelBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  deleteConfirmBtn: {
+    flex: 1.3,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: "#DC2626",
+    shadowColor: "#DC2626",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  deleteConfirmBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  headerOptionsBtn: {
+    padding: 6,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  groupModalActionsSection: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    marginTop: 20,
+    overflow: "hidden",
+  },
+  groupModalActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  groupModalActionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  groupModalActionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  groupModalActionDesc: {
+    fontSize: 11,
+    color: "#64748B",
+    marginTop: 2,
+  },
+  optionsModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  optionsModalCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    width: "100%",
+    maxWidth: 360,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  optionsModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  optionsModalHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  optionsModalTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  optionsModalSub: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  optionsCloseBtn: {
+    padding: 6,
+  },
+  optionsMenuDivider: {
+    height: 1,
+    backgroundColor: "#F1F5F9",
+    marginVertical: 8,
+  },
+  optionsMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 11,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    gap: 12,
+  },
+  optionsMenuIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  optionsMenuItemTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1E293B",
+  },
+  optionsMenuItemSub: {
+    fontSize: 11,
+    color: "#64748B",
+    marginTop: 1,
   },
 });

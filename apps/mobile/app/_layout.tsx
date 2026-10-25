@@ -18,19 +18,89 @@ import {
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
 import { Platform } from "react-native";
+import { ClerkProvider } from "@clerk/expo";
+import * as WebBrowser from "expo-web-browser";
 import { UserProvider } from "@/store/user-context";
+import { DecoyLockProvider } from "@/store/decoy-lock-context";
+import { GlobalDecoyLockView } from "@/components/GlobalDecoyLockView";
+import { tokenCache } from "@/services/tokenCache";
+import { ThemeProvider, useTheme } from "@/store/theme-context";
+
+WebBrowser.maybeCompleteAuthSession();
+
+const clerkPublishableKey =
+  process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+  "pk_test_cmVsYXhpbmctZmFsY29uLTUzNjIuY2xlcmsuYWNjb3VudHMuZGV2JA";
 
 if (Platform.OS !== "web") {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { registerGlobals } = require("@livekit/react-native");
-    registerGlobals();
-  } catch (e) {
-    console.warn("[LiveKit] registerGlobals error:", e);
+    const Constants = require("expo-constants").default;
+    const isExpoGo =
+      Constants?.appOwnership === "expo" ||
+      Constants?.executionEnvironment === "storeClient";
+
+    // WebRTC native modules are bundled in custom development builds, not Expo Go
+    if (!isExpoGo) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { registerGlobals } = require("@livekit/react-native");
+      registerGlobals();
+    }
+  } catch (e: any) {
+    if (!e?.message?.includes("WebRTC native module not found")) {
+      console.warn("[LiveKit] registerGlobals error:", e);
+    }
   }
 }
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+function RootNavigation() {
+  const { colors, isDark } = useTheme();
+
+  return (
+    <>
+      <StatusBar style={isDark ? "light" : "dark"} />
+      <Stack
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: colors.card,
+          },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: {
+            fontFamily: "PlusJakartaSans-Bold",
+            fontWeight: "700",
+          },
+          contentStyle: {
+            backgroundColor: colors.background,
+          },
+        }}
+      >
+        <Stack.Screen
+          name="index"
+          options={{
+            title: "ChatApp",
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="(tabs)"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="chat"
+          options={{
+            title: "Chat",
+            headerShown: false,
+          }}
+        />
+      </Stack>
+      <GlobalDecoyLockView />
+    </>
+  );
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -56,46 +126,19 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
-      <UserProvider>
-        <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerStyle: {
-              backgroundColor: "#FFFFFF",
-            },
-            headerTintColor: "#0F172A",
-            headerTitleStyle: {
-              fontFamily: "PlusJakartaSans-Bold",
-              fontWeight: "700",
-            },
-            contentStyle: {
-              backgroundColor: "#F8FAFC",
-            },
-          }}
-        >
-          <Stack.Screen
-            name="index"
-            options={{
-              title: "ChatApp",
-              headerShown: false,
-            }}
-          />
-          <Stack.Screen
-            name="(tabs)"
-            options={{
-              headerShown: false,
-            }}
-          />
-          <Stack.Screen
-            name="chat"
-            options={{
-              title: "Chat",
-              headerShown: false,
-            }}
-          />
-        </Stack>
-      </UserProvider>
-    </SafeAreaProvider>
+    <ClerkProvider
+      publishableKey={clerkPublishableKey}
+      tokenCache={Platform.OS !== "web" ? tokenCache : undefined}
+    >
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <UserProvider>
+            <DecoyLockProvider>
+              <RootNavigation />
+            </DecoyLockProvider>
+          </UserProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </ClerkProvider>
   );
 }

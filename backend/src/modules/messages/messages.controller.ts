@@ -56,6 +56,40 @@ messagesRouter.post("/:id/delete", async (c) => {
   }
 });
 
+// Clear all messages in a conversation for the current user
+messagesRouter.post("/clear", async (c) => {
+  try {
+    const body = await c.req.json<{
+      currentUserId: string;
+      recipientId?: string;
+      groupId?: string;
+    }>();
+    if (!body.currentUserId) {
+      return c.json({ error: "currentUserId is required" }, 400);
+    }
+    const result = await messagesService.clearChat(body);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to clear chat";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Live translate message text (English to Hindi or other target language)
+messagesRouter.post("/translate", async (c) => {
+  try {
+    const body = await c.req.json<{ text: string; targetLang?: string }>();
+    if (!body?.text) {
+      return c.json({ error: "text is required" }, 400);
+    }
+    const result = await messagesService.translateText(body.text, body.targetLang || "hi");
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to translate message";
+    return c.json({ error: message }, 500);
+  }
+});
+
 export const usersRouter = new Hono();
 
 // List all registered users (supports optional search query by username or name)
@@ -110,10 +144,98 @@ usersRouter.get("/blocked", async (c) => {
   }
 });
 
-// Register new user profile (name, unique username, unique phoneNumber)
+// Toggle favorite user
+usersRouter.post("/favorites/toggle", async (c) => {
+  try {
+    const body = await c.req.json<{ userId: string; favoriteUserId: string }>();
+    if (!body.userId || !body.favoriteUserId) {
+      return c.json({ error: "userId and favoriteUserId are required" }, 400);
+    }
+    const result = await messagesService.toggleFavoriteUser(body.userId, body.favoriteUserId);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to toggle favorite user";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Add favorite user
+usersRouter.post("/favorites/add", async (c) => {
+  try {
+    const body = await c.req.json<{ userId: string; favoriteUserId: string }>();
+    if (!body.userId || !body.favoriteUserId) {
+      return c.json({ error: "userId and favoriteUserId are required" }, 400);
+    }
+    await messagesService.addFavoriteUser(body.userId, body.favoriteUserId);
+    return c.json({ status: "ok", isFavorite: true }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to add favorite user";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Remove favorite user
+usersRouter.post("/favorites/remove", async (c) => {
+  try {
+    const body = await c.req.json<{ userId: string; favoriteUserId: string }>();
+    if (!body.userId || !body.favoriteUserId) {
+      return c.json({ error: "userId and favoriteUserId are required" }, 400);
+    }
+    await messagesService.removeFavoriteUser(body.userId, body.favoriteUserId);
+    return c.json({ status: "ok", isFavorite: false }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to remove favorite user";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Get favorite user IDs for a user
+usersRouter.get("/favorites", async (c) => {
+  try {
+    const userId = c.req.query("userId");
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+    const favoriteUserIds = await messagesService.getFavoriteUserIds(userId);
+    return c.json({ favoriteUserIds }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch favorite users";
+    return c.json({ error: message }, 500);
+  }
+});
+
+// Check if a user profile exists for a Clerk User ID
+usersRouter.get("/by-clerk/:clerkId", async (c) => {
+  try {
+    const clerkId = c.req.param("clerkId");
+    const email = c.req.query("email");
+    const user = await messagesService.getUserByClerkId(clerkId, email);
+    if (!user) {
+      return c.json({ exists: false, message: "Profile creation required" }, 200);
+    }
+    return c.json({ exists: true, user }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to verify Clerk user";
+    return c.json({ error: message }, 500);
+  }
+});
+
+// Check if username or phoneNumber is available
+usersRouter.post("/check-availability", async (c) => {
+  try {
+    const body = (await c.req.json()) as { username?: string; phoneNumber?: string };
+    const result = await messagesService.checkAvailability(body.username, body.phoneNumber);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Check failed";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Register new user profile (name, unique username, unique phoneNumber, password, clerkId)
 usersRouter.post("/register", async (c) => {
   try {
-    const body = await c.req.json<RegisterUserPayload>();
+    const body = (await c.req.json()) as RegisterUserPayload;
     const user = await messagesService.registerUser(body);
     return c.json({ user }, 201);
   } catch (error) {
@@ -122,30 +244,75 @@ usersRouter.post("/register", async (c) => {
   }
 });
 
-// Sign in with existing username or phone number
+// Sign in with username / phone number and password
 usersRouter.post("/login", async (c) => {
   try {
-    const body = await c.req.json<LoginUserPayload>();
-    const user = await messagesService.loginUser(body.identifier);
+    const body = (await c.req.json()) as LoginUserPayload;
+    const user = await messagesService.loginUser(body.identifier, body.password);
     return c.json({ user }, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Login failed";
-    return c.json({ error: message }, 404);
+    const status = message.includes("Incorrect password") || message.includes("Password is required") ? 401 : 404;
+    return c.json({ error: message }, status);
   }
 });
 
-// Update user display name (username and phone number are strictly immutable)
-usersRouter.patch("/:id", async (c) => {
+// Update user profile (display name, avatarUrl; username and phone number are strictly immutable)
+const handleUpdateProfile = async (c: any) => {
   try {
     const id = c.req.param("id");
-    const body = await c.req.json<{ name?: string }>();
-    if (!body.name) {
-      return c.json({ error: "Display name is required." }, 400);
+    const body = (await c.req.json()) as { name?: string; avatarUrl?: string | null };
+    if (body.name === undefined && body.avatarUrl === undefined) {
+      return c.json({ error: "Display name or avatarUrl is required." }, 400);
     }
-    const user = await messagesService.updateUserName(id, body.name);
+    const user = await messagesService.updateUserProfile(id, body);
     return c.json({ user }, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update profile";
+    return c.json({ error: message }, 400);
+  }
+};
+
+usersRouter.patch("/:id", handleUpdateProfile);
+usersRouter.post("/:id", handleUpdateProfile);
+
+// Get user's private contact aliases (custom nicknames)
+usersRouter.get("/:id/contact-aliases", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const aliases = await messagesService.getContactAliases(id);
+    return c.json({ aliases }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load aliases";
+    return c.json({ error: message }, 500);
+  }
+});
+
+// Set or update a user's private contact alias
+usersRouter.post("/:id/contact-aliases", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ targetUserId: string; customName: string }>();
+    if (!body.targetUserId) {
+      return c.json({ error: "targetUserId is required" }, 400);
+    }
+    const result = await messagesService.setContactAlias(id, body.targetUserId, body.customName);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to set alias";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Delete a user's private contact alias (reset to default name)
+usersRouter.delete("/:id/contact-aliases/:targetUserId", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const targetUserId = c.req.param("targetUserId");
+    const result = await messagesService.deleteContactAlias(id, targetUserId);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete alias";
     return c.json({ error: message }, 400);
   }
 });
@@ -266,3 +433,135 @@ groupsRouter.post("/:id/chugli/alias", async (c) => {
     return c.json({ error: message }, 400);
   }
 });
+
+// Delete group permanently (Admin only)
+groupsRouter.delete("/:id", async (c) => {
+  try {
+    const groupId = c.req.param("id");
+    let userId = c.req.query("userId");
+    if (!userId) {
+      const body = await c.req.json<{ userId: string }>().catch(() => null);
+      userId = body?.userId;
+    }
+    if (!userId) {
+      return c.json({ error: "userId is required to delete a group" }, 400);
+    }
+    const result = await messagesService.deleteGroup(groupId, userId);
+    return c.json({ status: "ok", group: result }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete group";
+    return c.json({ error: message }, 400);
+  }
+});
+
+groupsRouter.post("/:id/delete", async (c) => {
+  try {
+    const groupId = c.req.param("id");
+    let userId = c.req.query("userId");
+    if (!userId) {
+      const body = await c.req.json<{ userId: string }>().catch(() => null);
+      userId = body?.userId;
+    }
+    if (!userId) {
+      return c.json({ error: "userId is required to delete a group" }, 400);
+    }
+    const result = await messagesService.deleteGroup(groupId, userId);
+    return c.json({ status: "ok", group: result }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete group";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Leave / exit group
+groupsRouter.post("/:id/leave", async (c) => {
+  try {
+    const groupId = c.req.param("id");
+    let userId = c.req.query("userId");
+    if (!userId) {
+      const body = (await c.req.json().catch(() => null)) as { userId?: string } | null;
+      userId = body?.userId;
+    }
+    if (!userId) {
+      return c.json({ error: "userId is required to leave group" }, 400);
+    }
+    const result = await messagesService.leaveGroup(groupId, userId);
+    return c.json({ status: "ok", ...result }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to leave group";
+    return c.json({ error: message }, 400);
+  }
+});
+
+export const friendsRouter = new Hono();
+
+// Send friend request by username
+friendsRouter.post("/request", async (c) => {
+  try {
+    const body = await c.req.json<{ senderId: string; targetUsername: string }>();
+    if (!body.senderId || !body.targetUsername) {
+      return c.json({ error: "senderId and targetUsername are required" }, 400);
+    }
+    const request = await messagesService.sendFriendRequest(body.senderId, body.targetUsername);
+    return c.json({ status: "ok", request }, 201);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to send friend request";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Respond to friend request (accept or declined)
+friendsRouter.post("/respond", async (c) => {
+  try {
+    const body = await c.req.json<{ requestId: string; userId: string; action: "accept" | "declined" }>();
+    if (!body.requestId || !body.userId || !body.action) {
+      return c.json({ error: "requestId, userId, and action ('accept' | 'declined') are required" }, 400);
+    }
+    const request = await messagesService.respondFriendRequest(body.requestId, body.userId, body.action);
+    return c.json({ status: "ok", request }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to respond to friend request";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Get user's friends and pending requests
+friendsRouter.get("/list/:userId", async (c) => {
+  try {
+    const userId = c.req.param("userId");
+    const data = await messagesService.getUserFriends(userId);
+    return c.json(data, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch friends";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Check friendship status between two users
+friendsRouter.get("/status/:userId/:targetUserId", async (c) => {
+  try {
+    const userId = c.req.param("userId");
+    const targetUserId = c.req.param("targetUserId");
+    const data = await messagesService.getFriendshipStatus(userId, targetUserId);
+    return c.json(data, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch friendship status";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Unfriend a user
+friendsRouter.post("/unfriend", async (c) => {
+  try {
+    const body = await c.req.json<{ userId: string; targetUserId: string }>();
+    if (!body.userId || !body.targetUserId) {
+      return c.json({ error: "userId and targetUserId are required" }, 400);
+    }
+    const result = await messagesService.unfriendUser(body.userId, body.targetUserId);
+    return c.json(result, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to unfriend user";
+    return c.json({ error: message }, 400);
+  }
+});
+

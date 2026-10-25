@@ -26,9 +26,11 @@ function createPrismaClient() {
                 error?.code === "P1002" ||
                 error?.code === "P1008" ||
                 error?.code === "P1017" ||
+                error?.code === "P2024" ||
                 error?.message?.includes("Can't reach database server") ||
                 error?.message?.includes("Connection closed") ||
-                error?.message?.includes("Connection reset");
+                error?.message?.includes("Connection reset") ||
+                error?.message?.includes("Timed out fetching a new connection");
 
               if (isConnError && attempts < 3) {
                 console.warn(

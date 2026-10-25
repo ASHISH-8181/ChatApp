@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
 import type { ChatUser } from "@chatapp/shared";
 import { getServerUrl, setServerUrl } from "@/services/api";
+import { getStoredItem, setStoredItem, removeStoredItem } from "@/services/storage";
+import { mobileCache } from "@/services/cache";
 
 interface UserContextValue {
   currentUser: ChatUser | null;
@@ -16,7 +18,7 @@ const UserContext = createContext<UserContextValue | undefined>(undefined);
 
 const STORAGE_KEY = "chatapp_current_user";
 
-function loadSavedUser(): ChatUser | null {
+function loadSavedUserSync(): ChatUser | null {
   try {
     if (typeof window !== "undefined" && window.localStorage) {
       const data = window.localStorage.getItem(STORAGE_KEY);
@@ -26,26 +28,32 @@ function loadSavedUser(): ChatUser | null {
   return null;
 }
 
-function persistUser(user: ChatUser | null) {
-  try {
-    if (typeof window !== "undefined" && window.localStorage) {
-      if (user) {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-      } else {
-        window.localStorage.removeItem(STORAGE_KEY);
-      }
-    }
-  } catch {}
-}
-
 export function UserProvider({ children }: { children: React.ReactNode }) {
-  const [currentUser, setCurrentUserState] = useState<ChatUser | null>(loadSavedUser);
+  const [currentUser, setCurrentUserState] = useState<ChatUser | null>(loadSavedUserSync);
   const [registeredUsers, setRegisteredUsers] = useState<ChatUser[]>([]);
   const [serverUrl, setUrlState] = useState<string>(getServerUrl());
 
+  // Load persisted user on native startup and preload cache
+  useEffect(() => {
+    getStoredItem(STORAGE_KEY).then((data) => {
+      if (data) {
+        try {
+          const user = JSON.parse(data) as ChatUser;
+          setCurrentUserState(user);
+          mobileCache.preloadCache(user.id).catch(() => {});
+        } catch {}
+      }
+    });
+  }, []);
+
   const setCurrentUser = (user: ChatUser | null) => {
     setCurrentUserState(user);
-    persistUser(user);
+    if (user) {
+      setStoredItem(STORAGE_KEY, JSON.stringify(user)).catch(() => {});
+      mobileCache.preloadCache(user.id).catch(() => {});
+    } else {
+      removeStoredItem(STORAGE_KEY).catch(() => {});
+    }
   };
 
   const clearUser = () => {

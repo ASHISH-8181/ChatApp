@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bitcode": false
+      "bitcode": false,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Allow ChatApp to access your photos to save pictures to your gallery.",
+        "NSPhotoLibraryAddUsageDescription": "Allow ChatApp to save photos to your gallery."
+      }
     },
     "android": {
       "package": "com.ashish.chatapp",
@@ -23,7 +27,10 @@
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.CAMERA",
         "android.permission.SYSTEM_ALERT_WINDOW",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -49,7 +56,17 @@
       ],
       "expo-audio",
       "@livekit/react-native-expo-plugin",
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow ChatApp to save photos to your gallery.",
+          "savePhotosPermission": "Allow ChatApp to save photos to your gallery."
+        }
+      ],
+      "expo-sharing",
+      "expo-secure-store",
+      "@clerk/expo"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -9,10 +9,14 @@ import type {
   HealthResponse,
   InviteGroupMembersPayload,
   RegisterUserPayload,
+  ClerkAuthCheckResponse,
+  CheckAvailabilityResponse,
   CreateMMRoomPayload,
   JoinMMRoomPayload,
   MMRoomState,
   MMMessage,
+  FriendRequestInfo,
+  FriendStatusResponse,
 } from "@chatapp/shared";
 
 function resolveDefaultServerUrl(): string {
@@ -136,7 +140,10 @@ export async function registerUserProfile(
   return data.user;
 }
 
-export async function loginUser(identifier: string): Promise<ChatUser> {
+export async function loginUser(
+  identifier: string,
+  password?: string
+): Promise<ChatUser> {
   const url = `${getServerUrl()}/api/users/login`;
   const response = await fetch(url, {
     method: "POST",
@@ -144,7 +151,7 @@ export async function loginUser(identifier: string): Promise<ChatUser> {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({ identifier }),
+    body: JSON.stringify({ identifier, password }),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -154,6 +161,51 @@ export async function loginUser(identifier: string): Promise<ChatUser> {
   }
 
   return data.user;
+}
+
+export async function checkClerkUserProfile(
+  clerkId: string,
+  email?: string
+): Promise<ClerkAuthCheckResponse> {
+  const query = email ? `?email=${encodeURIComponent(email)}` : "";
+  const url = `${getServerUrl()}/api/users/by-clerk/${encodeURIComponent(clerkId)}${query}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || `Failed to verify account (${response.status})`);
+  }
+
+  return data;
+}
+
+export async function checkAvailability(
+  username?: string,
+  phoneNumber?: string
+): Promise<CheckAvailabilityResponse> {
+  const url = `${getServerUrl()}/api/users/check-availability`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ username, phoneNumber }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    return { usernameAvailable: true, phoneAvailable: true };
+  }
+
+  return data;
 }
 
 export async function fetchAllUsers(query?: string): Promise<ChatUser[]> {
@@ -173,27 +225,46 @@ export async function fetchAllUsers(query?: string): Promise<ChatUser[]> {
   return data.users || [];
 }
 
-export async function updateUserDisplayName(
+export async function updateUserProfile(
   userId: string,
-  name: string
+  payload: { name?: string; avatarUrl?: string | null }
 ): Promise<ChatUser> {
   const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}`;
-  const response = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({ name }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error || "Failed to update profile name");
+    throw new Error(data.error || "Failed to update profile");
   }
 
   return data.user;
+}
+
+export async function updateUserDisplayName(
+  userId: string,
+  name: string
+): Promise<ChatUser> {
+  return updateUserProfile(userId, { name });
 }
 
 // --- Groups / Channels API ---
@@ -323,7 +394,50 @@ export async function extendChugliSession(
 }
 
 export async function endChugliSession(groupId: string, userId: string): Promise<void> {
-  const url = `${getServerUrl()}/api/groups/${encodeURIComponent(groupId)}/chugli/end`;
+  await deleteGroup(groupId, userId);
+}
+
+export async function deleteGroup(
+  groupId: string,
+  userId: string
+): Promise<{ success: boolean; id?: string; name?: string }> {
+  const url = `${getServerUrl()}/api/groups/${encodeURIComponent(groupId)}?userId=${encodeURIComponent(userId)}`;
+  let response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ userId }),
+  }).catch(() => null);
+
+  // Fallback to POST /api/groups/:id/delete if DELETE fails or is blocked by network proxy
+  if (!response || !response.ok) {
+    const postUrl = `${getServerUrl()}/api/groups/${encodeURIComponent(groupId)}/delete`;
+    response = await fetch(postUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to delete group");
+  }
+
+  return { success: true, id: data.group?.id, name: data.group?.name };
+}
+
+export async function leaveGroup(
+  groupId: string,
+  userId: string
+): Promise<{ status: string; group: GroupChat | null; isDeleted: boolean; groupName: string }> {
+  const url = `${getServerUrl()}/api/groups/${encodeURIComponent(groupId)}/leave`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -333,10 +447,13 @@ export async function endChugliSession(groupId: string, userId: string): Promise
     body: JSON.stringify({ userId }),
   });
 
+  const data = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to end Chugli session");
+    throw new Error(data.error || "Failed to leave group");
   }
+
+  return data;
 }
 
 export async function setChugliMemberAlias(
@@ -560,5 +677,224 @@ export async function fetchBlockedUsersApi(
     blockedUsers: data.blockedUsers || [],
     blockedUserIds: data.blockedUserIds || [],
   };
+}
+
+// --- Favorite Users API ---
+
+export async function toggleFavoriteUserApi(
+  userId: string,
+  favoriteUserId: string
+): Promise<{ isFavorite: boolean; favoriteUserIds: string[] }> {
+  const url = `${getServerUrl()}/api/users/favorites/toggle`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ userId, favoriteUserId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to update favorite status");
+  return {
+    isFavorite: Boolean(data.isFavorite),
+    favoriteUserIds: data.favoriteUserIds || (data.isFavorite ? [favoriteUserId] : []),
+  };
+}
+
+export async function fetchFavoriteUserIdsApi(userId: string): Promise<string[]> {
+  const url = `${getServerUrl()}/api/users/favorites?userId=${encodeURIComponent(userId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to load favorites");
+  return data.favoriteUserIds || [];
+}
+
+export async function uploadImageApi(
+  base64OrDataUri: string,
+  folder = "chatapp/view_once"
+): Promise<{ url: string; publicId: string }> {
+  const url = `${getServerUrl()}/api/upload/image`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ image: base64OrDataUri, folder }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to upload image");
+  return {
+    url: data.url,
+    publicId: data.publicId,
+  };
+}
+
+export async function clearChatApi(params: {
+  currentUserId: string;
+  recipientId?: string;
+  groupId?: string;
+}): Promise<{ clearedCount: number }> {
+  const url = `${getServerUrl()}/api/messages/clear`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to clear chat");
+  return data;
+}
+
+export async function sendFriendRequestApi(
+  senderId: string,
+  targetUsername: string
+): Promise<{ status: string; request: FriendRequestInfo }> {
+  const url = `${getServerUrl()}/api/friends/request`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ senderId, targetUsername }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to send friend request");
+  return data;
+}
+
+export async function respondFriendRequestApi(
+  requestId: string,
+  userId: string,
+  action: "accept" | "declined"
+): Promise<{ status: string; request: FriendRequestInfo }> {
+  const url = `${getServerUrl()}/api/friends/respond`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ requestId, userId, action }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to respond to friend request");
+  return data;
+}
+
+export async function fetchUserFriendsApi(userId: string): Promise<{
+  friends: ChatUser[];
+  friendIds: string[];
+  incomingRequests: FriendRequestInfo[];
+  outgoingRequests: FriendRequestInfo[];
+}> {
+  const url = `${getServerUrl()}/api/friends/list/${encodeURIComponent(userId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to fetch friends list");
+  return {
+    friends: data.friends || [],
+    friendIds: data.friendIds || [],
+    incomingRequests: data.incomingRequests || [],
+    outgoingRequests: data.outgoingRequests || [],
+  };
+}
+
+export async function fetchFriendshipStatusApi(
+  userId: string,
+  targetUserId: string
+): Promise<FriendStatusResponse> {
+  const url = `${getServerUrl()}/api/friends/status/${encodeURIComponent(userId)}/${encodeURIComponent(targetUserId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to fetch friendship status");
+  return {
+    status: data.status || "none",
+    requestId: data.requestId,
+    isFriend: Boolean(data.isFriend),
+  };
+}
+
+export async function unfriendUserApi(
+  userId: string,
+  targetUserId: string
+): Promise<{ success: boolean; targetUserId: string }> {
+  const url = `${getServerUrl()}/api/friends/unfriend`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ userId, targetUserId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to unfriend user");
+  return data;
+}
+
+export async function fetchContactAliasesApi(userId: string): Promise<Record<string, string>> {
+  try {
+    const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}/contact-aliases`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return {};
+    const data = await response.json().catch(() => ({}));
+    return data.aliases || {};
+  } catch {
+    return {};
+  }
+}
+
+export async function setContactAliasApi(
+  userId: string,
+  targetUserId: string,
+  customName: string
+): Promise<{ success: boolean; customName: string }> {
+  const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}/contact-aliases`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ targetUserId, customName }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to set custom nickname");
+  return data;
+}
+
+export async function deleteContactAliasApi(
+  userId: string,
+  targetUserId: string
+): Promise<{ success: boolean }> {
+  const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}/contact-aliases/${encodeURIComponent(targetUserId)}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to reset contact name");
+  return data;
+}
+
+export async function translateMessageApi(
+  text: string,
+  targetLang = "hi"
+): Promise<{ original: string; translated: string; targetLang: string }> {
+  const url = `${getServerUrl()}/api/messages/translate`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ text, targetLang }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Failed to translate message");
+    return data;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
 }
 

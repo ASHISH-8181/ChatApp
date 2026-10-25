@@ -3,15 +3,31 @@ import { StyleSheet, Platform } from "react-native";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@/components/Icon";
 import { Fonts, Colors } from "@/constants/theme";
+import { useDecoyLock } from "@/store/decoy-lock-context";
+
+import { useTheme } from "@/store/theme-context";
 
 export default function TabLayout() {
+  const { isLocked } = useDecoyLock();
+  const { colors, isDark } = useTheme();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textMuted,
-        tabBarStyle: styles.tabBar,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: isLocked
+          ? { display: "none" }
+          : [
+              styles.tabBar,
+              {
+                backgroundColor: colors.card,
+                borderTopColor: colors.border,
+                shadowColor: isDark ? "#000000" : "#0F172A",
+                shadowOpacity: isDark ? 0.25 : 0.05,
+              },
+            ],
         tabBarLabelStyle: styles.tabBarLabel,
         tabBarItemStyle: styles.tabBarItem,
       }}

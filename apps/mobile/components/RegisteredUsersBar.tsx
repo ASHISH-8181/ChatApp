@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import type { ChatUser } from "@chatapp/shared";
+import { UserAvatar } from "@/components/UserAvatar";
 
 interface RegisteredUsersBarProps {
   users: ChatUser[];
@@ -18,23 +19,6 @@ interface RegisteredUsersBarProps {
   onMentionUser?: (username: string) => void;
 }
 
-function getAvatarColor(name: string): string {
-  const colors = [
-    "#2563EB", // blue
-    "#7C3AED", // violet
-    "#DB2777", // pink
-    "#EA580C", // orange
-    "#059669", // emerald
-    "#0891B2", // cyan
-    "#4F46E5", // indigo
-    "#D97706", // amber
-  ];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return colors[Math.abs(hash) % colors.length];
-}
 
 export function RegisteredUsersBar({
   users,
@@ -149,8 +133,6 @@ export function RegisteredUsersBar({
           {sortedAndFilteredUsers.map((user) => {
             const isMe = user.id === currentUserId;
             const online = isUserOnline(user.id);
-            const initial = (user.name || "?").charAt(0).toUpperCase();
-            const avatarColor = getAvatarColor(user.username || user.name);
 
             return (
               <TouchableOpacity
@@ -163,15 +145,15 @@ export function RegisteredUsersBar({
                 onPress={() => setSelectedUser(user)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-                  <Text style={styles.avatarInitial}>{initial}</Text>
-                  <View
-                    style={[
-                      styles.presenceDot,
-                      online ? styles.presenceDotOnline : styles.presenceDotOffline,
-                    ]}
-                  />
-                </View>
+                <UserAvatar
+                  name={user.name}
+                  username={user.username}
+                  avatarUrl={user.avatarUrl}
+                  size={42}
+                  fontSize={16}
+                  showOnlineDot={true}
+                  isOnline={online}
+                />
 
                 <View style={styles.userInfo}>
                   <View style={styles.nameRow}>
@@ -272,8 +254,6 @@ export function RegisteredUsersBar({
             renderItem={({ item }) => {
               const isMe = item.id === currentUserId;
               const online = isUserOnline(item.id);
-              const initial = (item.name || "?").charAt(0).toUpperCase();
-              const avatarColor = getAvatarColor(item.username || item.name);
 
               return (
                 <TouchableOpacity
@@ -281,19 +261,15 @@ export function RegisteredUsersBar({
                   onPress={() => setSelectedUser(item)}
                   activeOpacity={0.7}
                 >
-                  <View
-                    style={[styles.directoryAvatar, { backgroundColor: avatarColor }]}
-                  >
-                    <Text style={styles.directoryAvatarText}>{initial}</Text>
-                    <View
-                      style={[
-                        styles.directoryPresenceDot,
-                        online
-                          ? styles.directoryPresenceDotOnline
-                          : styles.directoryPresenceDotOffline,
-                      ]}
-                    />
-                  </View>
+                  <UserAvatar
+                    name={item.name}
+                    username={item.username}
+                    avatarUrl={item.avatarUrl}
+                    size={44}
+                    fontSize={17}
+                    showOnlineDot={true}
+                    isOnline={online}
+                  />
 
                   <View style={styles.directoryCardInfo}>
                     <View style={styles.directoryCardNameRow}>
@@ -354,20 +330,16 @@ export function RegisteredUsersBar({
           <View style={styles.modalContent}>
             {selectedUser && (
               <>
-                <View
-                  style={[
-                    styles.modalAvatar,
-                    {
-                      backgroundColor: getAvatarColor(
-                        selectedUser.username || selectedUser.name
-                      ),
-                    },
-                  ]}
-                >
-                  <Text style={styles.modalAvatarText}>
-                    {(selectedUser.name || "?").charAt(0).toUpperCase()}
-                  </Text>
-                </View>
+                <UserAvatar
+                  name={selectedUser.name}
+                  username={selectedUser.username}
+                  avatarUrl={selectedUser.avatarUrl}
+                  size={72}
+                  fontSize={28}
+                  showOnlineDot={true}
+                  isOnline={isUserOnline(selectedUser.id)}
+                  style={{ marginBottom: 12 }}
+                />
 
                 <Text style={styles.modalName}>{selectedUser.name}</Text>
                 <Text style={styles.modalHandle}>@{selectedUser.username}</Text>

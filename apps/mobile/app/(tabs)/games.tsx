@@ -12,6 +12,10 @@ import { useLocalSearchParams } from "expo-router";
 import { useUser } from "@/store/user-context";
 import { socketService, type ConnectionStatus } from "@/services/socket";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
+import { LockNavButton } from "@/components/LockNavButton";
+import { ThemeNavButton } from "@/components/ThemeNavButton";
+import { useTheme } from "@/store/theme-context";
+import { Fonts } from "@/constants/theme";
 import { Ionicons } from "@/components/Icon";
 import { MurderMysteryModal } from "@/components/murder-mystery/MurderMysteryModal";
 import { ChessModal } from "@/components/chess/ChessModal";
@@ -19,6 +23,7 @@ import { LudoModal } from "@/components/ludo/LudoModal";
 
 export default function GamesTabScreen() {
   const { currentUser } = useUser();
+  const { colors, isDark } = useTheme();
   const params = useLocalSearchParams<{ open?: string }>();
 
   const [showMurderMysteryModal, setShowMurderMysteryModal] = useState(
@@ -42,20 +47,24 @@ export default function GamesTabScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={["top"]}>
       {/* Top Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
         <View style={styles.headerLeft}>
-          <View style={styles.headerIconBadge}>
-            <Ionicons name="game-controller" size={22} color="#2563EB" />
+          <View style={[styles.headerIconBadge, { backgroundColor: colors.primaryLight }]}>
+            <Ionicons name="game-controller" size={22} color={colors.primary} />
           </View>
-          <View>
-            <Text style={styles.headerTitle}>Games</Text>
-            <Text style={styles.headerSubtitle}>Multiplayer online games</Text>
+          <View style={styles.headerTitleWrap}>
+            <Text style={[styles.headerTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]} numberOfLines={1}>Games</Text>
+            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>Multiplayer online games</Text>
           </View>
         </View>
 
-        <ConnectionBadge status={connectionStatus} />
+        <View style={styles.headerRightGroup}>
+          <ThemeNavButton />
+          <LockNavButton compact={true} />
+          <ConnectionBadge status={connectionStatus} showText={false} />
+        </View>
       </View>
 
       <ScrollView
@@ -63,64 +72,64 @@ export default function GamesTabScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* GAME 1: CHESS */}
-        <View style={[styles.gameCard, styles.chessCard]}>
+        <View style={[styles.gameCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.cardHeader}>
-            <View style={[styles.cardTag, styles.chessTag]}>
+            <View style={[styles.cardTag, styles.chessTag, isDark && { backgroundColor: "#1E2A4A", borderColor: "#2563EB" }]}>
               <Text style={[styles.cardTagText, styles.chessTagText]}>2 PLAYERS • DUEL</Text>
             </View>
             <View style={styles.playerCountPill}>
-              <Ionicons name="people" size={13} color="#94A3B8" />
-              <Text style={styles.playerCountText}>2 Players</Text>
+              <Ionicons name="people" size={13} color={colors.textMuted} />
+              <Text style={[styles.playerCountText, { color: colors.textMuted }]}>2 Players</Text>
             </View>
           </View>
 
           <View style={styles.cardMainRow}>
-            <View style={[styles.cardEmojiBox, styles.chessEmojiBox]}>
+            <View style={[styles.cardEmojiBox, styles.chessEmojiBox, isDark && { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
               <Text style={styles.cardEmoji}>♟️</Text>
             </View>
             <View style={styles.cardInfo}>
-              <Text style={styles.cardTitle}>Chess Duel</Text>
-              <Text style={styles.cardGenre}>Turn-Based Strategy</Text>
+              <Text style={[styles.cardTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]}>Chess Duel</Text>
+              <Text style={[styles.cardGenre, { color: colors.primary, fontFamily: Fonts.medium }]}>Turn-Based Strategy</Text>
             </View>
           </View>
 
-          <Text style={styles.cardDesc}>
+          <Text style={[styles.cardDesc, { color: colors.textSecondary }]}>
             Challenge a friend to a real-time online duel. Includes room code sharing, legal move hints, and checkmate detection.
           </Text>
 
           <TouchableOpacity
-            style={[styles.playBtn, styles.chessBtn]}
+            style={[styles.playBtn, { backgroundColor: colors.primary }]}
             onPress={() => setShowChessModal(true)}
             activeOpacity={0.85}
           >
             <Ionicons name="play" size={16} color="#FFFFFF" style={styles.playBtnIcon} />
-            <Text style={styles.playBtnText}>Play Chess</Text>
+            <Text style={[styles.playBtnText, { fontFamily: Fonts.bold }]}>Play Chess</Text>
           </TouchableOpacity>
         </View>
 
         {/* GAME 2: LUDO CLUB */}
-        <View style={[styles.gameCard, styles.ludoCard]}>
+        <View style={[styles.gameCard, { backgroundColor: colors.card, borderColor: isDark ? colors.border : "#FED7AA" }]}>
           <View style={styles.cardHeader}>
-            <View style={[styles.cardTag, styles.ludoTag]}>
+            <View style={[styles.cardTag, styles.ludoTag, isDark && { backgroundColor: "#3D2410", borderColor: "#F97316" }]}>
               <Text style={[styles.cardTagText, styles.ludoTagText]}>2 TO 6 PLAYERS • CLASSIC</Text>
             </View>
             <View style={styles.playerCountPill}>
-              <Ionicons name="people" size={13} color="#94A3B8" />
-              <Text style={styles.playerCountText}>2 - 6 Players</Text>
+              <Ionicons name="people" size={13} color={colors.textMuted} />
+              <Text style={[styles.playerCountText, { color: colors.textMuted }]}>2 - 6 Players</Text>
             </View>
           </View>
 
           <View style={styles.cardMainRow}>
-            <View style={[styles.cardEmojiBox, styles.ludoEmojiBox]}>
+            <View style={[styles.cardEmojiBox, styles.ludoEmojiBox, isDark && { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
               <Text style={styles.cardEmoji}>🎲</Text>
             </View>
             <View style={styles.cardInfo}>
-              <Text style={styles.cardTitle}>Ludo Club</Text>
-              <Text style={styles.cardGenre}>Board Race & Capture</Text>
+              <Text style={[styles.cardTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]}>Ludo Club</Text>
+              <Text style={[styles.cardGenre, { color: "#F97316", fontFamily: Fonts.medium }]}>Board Race & Capture</Text>
             </View>
           </View>
 
-          <Text style={styles.cardDesc}>
+          <Text style={[styles.cardDesc, { color: colors.textSecondary }]}>
             Roll 3D dice, race your 4 tokens across the board, capture opponents, and rush home with up to 6 friends.
           </Text>
 
@@ -130,33 +139,33 @@ export default function GamesTabScreen() {
             activeOpacity={0.85}
           >
             <Ionicons name="play" size={16} color="#FFFFFF" style={styles.playBtnIcon} />
-            <Text style={styles.playBtnText}>Play Ludo</Text>
+            <Text style={[styles.playBtnText, { fontFamily: Fonts.bold }]}>Play Ludo</Text>
           </TouchableOpacity>
         </View>
 
         {/* GAME 3: MURDER MYSTERY */}
-        <View style={[styles.gameCard, styles.mysteryCard]}>
+        <View style={[styles.gameCard, { backgroundColor: colors.card, borderColor: isDark ? colors.border : "#E9D5FF" }]}>
           <View style={styles.cardHeader}>
-            <View style={[styles.cardTag, styles.mysteryTag]}>
+            <View style={[styles.cardTag, styles.mysteryTag, isDark && { backgroundColor: "#2A1847", borderColor: "#A855F7" }]}>
               <Text style={[styles.cardTagText, styles.mysteryTagText]}>3 TO 12 PLAYERS • DEDUCTION</Text>
             </View>
             <View style={styles.playerCountPill}>
-              <Ionicons name="people" size={13} color="#94A3B8" />
-              <Text style={styles.playerCountText}>3 - 12 Players</Text>
+              <Ionicons name="people" size={13} color={colors.textMuted} />
+              <Text style={[styles.playerCountText, { color: colors.textMuted }]}>3 - 12 Players</Text>
             </View>
           </View>
 
           <View style={styles.cardMainRow}>
-            <View style={[styles.cardEmojiBox, styles.mysteryEmojiBox]}>
+            <View style={[styles.cardEmojiBox, styles.mysteryEmojiBox, isDark && { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
               <Text style={styles.cardEmoji}>🕵️</Text>
             </View>
             <View style={styles.cardInfo}>
-              <Text style={styles.cardTitle}>Murder Mystery</Text>
-              <Text style={styles.cardGenre}>Social Deception & Voting</Text>
+              <Text style={[styles.cardTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]}>Murder Mystery</Text>
+              <Text style={[styles.cardGenre, { color: "#A855F7", fontFamily: Fonts.medium }]}>Social Deception & Voting</Text>
             </View>
           </View>
 
-          <Text style={styles.cardDesc}>
+          <Text style={[styles.cardDesc, { color: colors.textSecondary }]}>
             Secret murderers strike at night while doctors protect. Discuss suspects by day and vote out the killers before it is too late.
           </Text>
 
@@ -166,7 +175,7 @@ export default function GamesTabScreen() {
             activeOpacity={0.85}
           >
             <Ionicons name="play" size={16} color="#FFFFFF" style={styles.playBtnIcon} />
-            <Text style={styles.playBtnText}>Play Murder Mystery</Text>
+            <Text style={[styles.playBtnText, { fontFamily: Fonts.bold }]}>Play Murder Mystery</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -209,9 +218,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   headerLeft: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 10,
+    marginRight: 8,
+    minWidth: 0,
+  },
+  headerTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   headerIconBadge: {
     width: 38,
@@ -220,6 +236,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#EFF6FF",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   headerTitle: {
     fontSize: 18,
@@ -230,6 +247,12 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 12,
     color: "#64748B",
+  },
+  headerRightGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
   },
   scrollContent: {
     padding: 16,

@@ -38,6 +38,33 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
     fill: false,
     strokeWidth: 2,
   },
+  "person-add": {
+    d: "M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+    fill: true,
+  },
+  "person-add-outline": {
+    d: "M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  "lock-closed-outline": {
+    d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  "logo-google": {
+    d: "M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09zM12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23zM5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63zM12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z",
+    fill: true,
+  },
+  time: {
+    d: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+    fill: true,
+  },
+  "time-outline": {
+    d: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+    fill: false,
+    strokeWidth: 2,
+  },
 
   // Games & Controller
   "game-controller": {
@@ -257,6 +284,80 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
     fill: false,
     strokeWidth: 2,
   },
+
+  // Media, Camera & Interaction Icons
+  camera: {
+    d: "M4 7h3l1.5-2h7L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm8 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-2a2 2 0 1 1 0-4 2 2 0 0 1 0 4z",
+    fill: true,
+  },
+  "camera-outline": {
+    d: "M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  happy: {
+    d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3.5 7c.83 0 1.5.67 1.5 1.5S9.33 12 8.5 12 7 11.33 7 10.5 7.67 9 8.5 9zm7 0c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5-1.5-.67-1.5-1.5.67-1.5 1.5-1.5zm-3.5 9.5c-2.33 0-4.31-1.46-5.11-3.5h10.22c-.8 2.04-2.78 3.5-5.11 3.5z",
+    fill: true,
+  },
+  "happy-outline": {
+    d: "M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-3.5-13a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-7.07 8.5a5.002 5.002 0 0 0 7.14 0",
+    fill: false,
+    strokeWidth: 2,
+  },
+  keypad: {
+    d: "M4 5h4v4H4V5zm7 0h4v4h-4V5zm7 0h4v4h-4V5zM4 11h4v4H4v-4zm7 0h4v4h-4v-4zm7 0h4v4h-4v-4zM4 17h4v4H4v-4zm7 0h4v4h-4v-4zm7 0h4v4h-4v-4z",
+    fill: true,
+  },
+  "keypad-outline": {
+    d: "M4 5h4v4H4V5zm7 0h4v4h-4V5zm7 0h4v4h-4V5zM4 11h4v4H4v-4zm7 0h4v4h-4v-4zm7 0h4v4h-4v-4zM4 17h4v4H4v-4zm7 0h4v4h-4v-4zm7 0h4v4h-4v-4z",
+    fill: false,
+    strokeWidth: 1.8,
+  },
+  download: {
+    d: "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z",
+    fill: true,
+  },
+  "download-outline": {
+    d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5l5 5 5-5m-5 5V3",
+    fill: false,
+    strokeWidth: 2,
+  },
+  image: {
+    d: "M4 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4zm16 12H4l5-6 3 3.5 3.5-4.5 4.5 7z",
+    fill: true,
+  },
+  "image-outline": {
+    d: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  sparkles: {
+    d: "M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z",
+    fill: true,
+  },
+  "sparkles-outline": {
+    d: "M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  flash: {
+    d: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+    fill: true,
+  },
+  "flash-outline": {
+    d: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  heart: {
+    d: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
+    fill: true,
+  },
+  "heart-outline": {
+    d: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
+    fill: false,
+    strokeWidth: 2,
+  },
 };
 
 // Fallback Unicode glyphs
@@ -316,11 +417,37 @@ const GLYPH_FALLBACKS: Record<string, string> = {
   menu: "☰",
   grid: "▦",
   "hand-right": "👉",
+  camera: "📷",
+  "camera-outline": "📷",
+  happy: "😊",
+  "happy-outline": "😊",
+  keypad: "⌨️",
+  "keypad-outline": "⌨️",
+  download: "⬇️",
+  "download-outline": "⬇️",
+  image: "🖼️",
+  "image-outline": "🖼️",
+  images: "🖼️",
+  "images-outline": "🖼️",
+  sparkles: "✨",
+  "sparkles-outline": "✨",
+  flash: "⚡",
+  "flash-outline": "⚡",
+  heart: "❤️",
+  "heart-outline": "🤍",
 };
 
 function getSmartGlyph(name: string): string {
   if (GLYPH_FALLBACKS[name]) return GLYPH_FALLBACKS[name];
   const lower = name.toLowerCase();
+  if (lower.includes("camera") || lower.includes("photo") || lower.includes("picture")) return "📷";
+  if (lower.includes("happy") || lower.includes("smile") || lower.includes("emoji")) return "😊";
+  if (lower.includes("keypad") || lower.includes("keyboard")) return "⌨️";
+  if (lower.includes("download") || lower.includes("save")) return "⬇️";
+  if (lower.includes("image")) return "🖼️";
+  if (lower.includes("sparkle")) return "✨";
+  if (lower.includes("flash") || lower.includes("lightning")) return "⚡";
+  if (lower.includes("heart")) return "❤️";
   if (lower.includes("game") || lower.includes("controller")) return "🎮";
   if (lower.includes("dice")) return "🎲";
   if (lower.includes("trophy") || lower.includes("medal")) return "🏆";
@@ -334,6 +461,8 @@ function getSmartGlyph(name: string): string {
   if (lower.includes("back") || lower.includes("left")) return "‹";
   if (lower.includes("forward") || lower.includes("right") || lower.includes("chevron")) return "›";
   if (lower.includes("add") || lower.includes("plus")) return "+";
+  if (lower.includes("lock")) return "🔒";
+  if (lower.includes("time") || lower.includes("clock")) return "⏱️";
   if (lower.includes("check")) return "✓";
   if (lower.includes("close")) return "✕";
   return "✦";

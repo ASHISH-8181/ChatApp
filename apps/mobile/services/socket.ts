@@ -14,6 +14,8 @@ import type {
   RespondInvitationPayload,
   ExtendChugliPayload,
   SetChugliAliasPayload,
+  DeleteGroupPayload,
+  LeaveGroupPayload,
   MMRoomState,
   MMMessage,
   MMRole,
@@ -42,6 +44,7 @@ import type {
   GameChatMessage,
   GameVoiceChunk,
   GameVoiceStatus,
+  FriendRequestInfo,
 } from "@chatapp/shared";
 import { getServerUrl } from "./api";
 
@@ -54,6 +57,8 @@ type UsersListener = (users: ChatUser[]) => void;
 type PresenceListener = (onlineUserIds: string[]) => void;
 type ReadReceiptListener = (data: { messageIds: string[]; reader: ReadReceipt }) => void;
 type GroupListener = (group: GroupChat) => void;
+type GroupDeletedListener = (data: { groupId: string; groupName: string; deletedByUserId: string }) => void;
+type GroupMemberLeftListener = (data: { groupId: string; userId: string; userName: string }) => void;
 type InvitationListener = (invitation: GroupInvitationInfo) => void;
 type ChugliWarningListener = (data: { groupId: string; groupName: string; expiresAt: string; remainingMinutes: number }) => void;
 type ChugliExtendedListener = (data: { group: GroupChat; expiresAt: string; additionalMinutes: number }) => void;
@@ -75,6 +80,11 @@ type MessageEditedListener = (data: {
 }) => void;
 type UserBlockedListener = (data: { blockerId: string; targetUserId: string }) => void;
 type UserUnblockedListener = (data: { blockerId: string; targetUserId: string }) => void;
+export type FavoriteOnlineListener = (data: {
+  userId: string;
+  name: string;
+  username: string;
+}) => void;
 type MMStateListener = (room: MMRoomState) => void;
 type MMMessageListener = (message: MMMessage) => void;
 type MMNightResultListener = (data: { eliminatedNames: string[]; everyoneSurvived: boolean }) => void;
@@ -91,6 +101,16 @@ type LudoTokenListener = (data: { color: LudoColor; tokenId: number; step: numbe
 type GameChatListener = (message: GameChatMessage) => void;
 type GameVoiceChunkListener = (chunk: GameVoiceChunk) => void;
 type GameVoiceStatusListener = (status: GameVoiceStatus) => void;
+type ViewOnceOpenedListener = (data: {
+  messageId: string;
+  userId: string;
+  viewedAt: string;
+  recipientId?: string;
+  groupId?: string;
+}) => void;
+type FriendRequestListener = (request: FriendRequestInfo) => void;
+type FriendRespondedListener = (data: { requestId: string; status: "accepted" | "declined"; user: ChatUser }) => void;
+type FriendUnfriendedListener = (data: { userId: string; targetUserId: string }) => void;
 
 class SocketService {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
@@ -98,14 +118,21 @@ class SocketService {
   private messageListeners = new Set<MessageListener>();
   private messageDeletedListeners = new Set<MessageDeletedListener>();
   private messageEditedListeners = new Set<MessageEditedListener>();
+  private viewOnceOpenedListeners = new Set<ViewOnceOpenedListener>();
   private userBlockedListeners = new Set<UserBlockedListener>();
   private userUnblockedListeners = new Set<UserUnblockedListener>();
+  private favoriteOnlineListeners = new Set<FavoriteOnlineListener>();
+  private friendRequestListeners = new Set<FriendRequestListener>();
+  private friendRespondedListeners = new Set<FriendRespondedListener>();
+  private friendUnfriendedListeners = new Set<FriendUnfriendedListener>();
   private statusListeners = new Set<StatusListener>();
   private errorListeners = new Set<ErrorListener>();
   private usersListeners = new Set<UsersListener>();
   private presenceListeners = new Set<PresenceListener>();
   private readReceiptListeners = new Set<ReadReceiptListener>();
   private groupListeners = new Set<GroupListener>();
+  private groupDeletedListeners = new Set<GroupDeletedListener>();
+  private groupMemberLeftListeners = new Set<GroupMemberLeftListener>();
   private invitationListeners = new Set<InvitationListener>();
   private chugliWarningListeners = new Set<ChugliWarningListener>();
   private chugliExtendedListeners = new Set<ChugliExtendedListener>();
@@ -198,6 +225,10 @@ class SocketService {
       this.messageListeners.forEach((listener) => listener(message));
     });
 
+    this.socket.on("message:viewOnce:opened", (data) => {
+      this.viewOnceOpenedListeners.forEach((listener) => listener(data));
+    });
+
     this.socket.on("users:list", (users: ChatUser[]) => {
       this.usersListeners.forEach((listener) => listener(users));
     });
@@ -217,6 +248,14 @@ class SocketService {
 
     this.socket.on("group:updated", (group) => {
       this.groupListeners.forEach((l) => l(group));
+    });
+
+    this.socket.on("group:deleted", (data) => {
+      this.groupDeletedListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("group:member_left", (data) => {
+      this.groupMemberLeftListeners.forEach((l) => l(data));
     });
 
     this.socket.on("group:invitation", (invitation) => {
@@ -303,6 +342,22 @@ class SocketService {
       this.userUnblockedListeners.forEach((l) => l(data));
     });
 
+    this.socket.on("user:favorite_online", (data) => {
+      this.favoriteOnlineListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("friend:request:received", (data) => {
+      this.friendRequestListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("friend:request:responded", (data) => {
+      this.friendRespondedListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("friend:unfriended", (data) => {
+      this.friendUnfriendedListeners.forEach((l) => l(data));
+    });
+
     this.socket.on("error", (errorData) => {
 
       console.warn("Socket.IO server error event:", errorData.message);
@@ -324,11 +379,18 @@ class SocketService {
 
   sendMessage(
     text: string,
-    options?: { recipientId?: string; groupId?: string }
+    options?: {
+      recipientId?: string;
+      groupId?: string;
+      imageUrl?: string | null;
+      imagePublicId?: string | null;
+      isViewOnce?: boolean;
+      clientTempId?: string;
+    }
   ): Promise<ChatMessage> {
     return new Promise((resolve, reject) => {
       const trimmed = text.trim();
-      if (!trimmed) {
+      if (!trimmed && !options?.imageUrl) {
         return reject(new Error("Cannot send empty message."));
       }
       if (!this.currentUser) {
@@ -339,12 +401,16 @@ class SocketService {
       }
 
       const payload: SendMessagePayload = {
-        text: trimmed,
+        text: trimmed || (options?.imageUrl ? (options.isViewOnce ? "Photo (View once)" : "Photo") : ""),
         senderId: this.currentUser.id,
         senderName: this.currentUser.name,
         senderUsername: this.currentUser.username,
         recipientId: options?.recipientId,
         groupId: options?.groupId,
+        imageUrl: options?.imageUrl,
+        imagePublicId: options?.imagePublicId,
+        isViewOnce: options?.isViewOnce,
+        clientTempId: options?.clientTempId,
       };
 
       this.socket.emit("chat:send", payload, (response) => {
@@ -359,6 +425,40 @@ class SocketService {
         }
       });
     });
+  }
+
+  openViewOnceMessage(messageId: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (!this.currentUser) {
+        return reject(new Error("You must join with a profile first."));
+      }
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Not connected to chat server."));
+      }
+
+      this.socket.emit(
+        "message:viewOnce:open",
+        { messageId, userId: this.currentUser.id },
+        (response) => {
+          if (response && response.status === "ok" && response.imageUrl) {
+            resolve(response.imageUrl);
+          } else {
+            const errMsg =
+              response && response.status === "error"
+                ? response.message
+                : "This photo has already expired and cannot be viewed again.";
+            reject(new Error(errMsg));
+          }
+        }
+      );
+    });
+  }
+
+  subscribeToViewOnceOpened(listener: ViewOnceOpenedListener): () => void {
+    this.viewOnceOpenedListeners.add(listener);
+    return () => {
+      this.viewOnceOpenedListeners.delete(listener);
+    };
   }
 
   createGroup(payload: CreateGroupPayload): Promise<GroupChat> {
@@ -403,6 +503,38 @@ class SocketService {
           resolve(res.group);
         } else {
           const errMsg = res.status === "error" ? res.message : "Failed to respond to invitation";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  deleteGroup(payload: DeleteGroupPayload): Promise<{ status: "ok"; groupId?: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Not connected to chat server."));
+      }
+      this.socket.emit("group:delete", payload, (res) => {
+        if (res.status === "ok") {
+          resolve(res);
+        } else {
+          const errMsg = res.status === "error" ? res.message : "Failed to delete group";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  leaveGroup(payload: LeaveGroupPayload): Promise<{ status: "ok"; group?: GroupChat | null; isDeleted?: boolean }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Not connected to chat server."));
+      }
+      this.socket.emit("group:leave", payload, (res) => {
+        if (res.status === "ok") {
+          resolve(res);
+        } else {
+          const errMsg = res.status === "error" ? res.message : "Failed to leave group";
           reject(new Error(errMsg));
         }
       });
@@ -459,6 +591,20 @@ class SocketService {
     };
   }
 
+  subscribeToGroupDeleted(listener: GroupDeletedListener): () => void {
+    this.groupDeletedListeners.add(listener);
+    return () => {
+      this.groupDeletedListeners.delete(listener);
+    };
+  }
+
+  subscribeToGroupMemberLeft(listener: GroupMemberLeftListener): () => void {
+    this.groupMemberLeftListeners.add(listener);
+    return () => {
+      this.groupMemberLeftListeners.delete(listener);
+    };
+  }
+
   subscribeToInvitations(listener: InvitationListener): () => void {
     this.invitationListeners.add(listener);
     return () => {
@@ -506,6 +652,102 @@ class SocketService {
     this.userUnblockedListeners.add(listener);
     return () => {
       this.userUnblockedListeners.delete(listener);
+    };
+  }
+
+  subscribeToFriendRequests(listener: FriendRequestListener): () => void {
+    this.friendRequestListeners.add(listener);
+    return () => {
+      this.friendRequestListeners.delete(listener);
+    };
+  }
+
+  subscribeToFriendResponded(listener: FriendRespondedListener): () => void {
+    this.friendRespondedListeners.add(listener);
+    return () => {
+      this.friendRespondedListeners.delete(listener);
+    };
+  }
+
+  sendFriendRequest(senderId: string, targetUsername: string): Promise<FriendRequestInfo> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      this.socket.emit("friend:request:send", { senderId, targetUsername }, (res) => {
+        if (res && res.status === "ok" && res.request) {
+          resolve(res.request);
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to send friend request";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  respondFriendRequest(
+    requestId: string,
+    userId: string,
+    action: "accept" | "declined"
+  ): Promise<FriendRequestInfo> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      this.socket.emit("friend:request:respond", { requestId, userId, action }, (res) => {
+        if (res && res.status === "ok" && res.request) {
+          resolve(res.request);
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to respond to friend request";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  unfriendUser(userId: string, targetUserId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      this.socket.emit("friend:unfriend", { userId, targetUserId }, (res) => {
+        if (res && res.status === "ok") {
+          resolve();
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to unfriend user";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  setContactAlias(userId: string, targetUserId: string, customName: string): Promise<{ customName: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      this.socket.emit("user:alias:set", { userId, targetUserId, customName }, (res) => {
+        if (res && res.status === "ok") {
+          resolve({ customName: res.customName });
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to set custom nickname";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  subscribeToFriendUnfriended(listener: FriendUnfriendedListener): () => void {
+    this.friendUnfriendedListeners.add(listener);
+    return () => {
+      this.friendUnfriendedListeners.delete(listener);
+    };
+  }
+
+  subscribeToFavoriteOnline(listener: FavoriteOnlineListener): () => void {
+    this.favoriteOnlineListeners.add(listener);
+    return () => {
+      this.favoriteOnlineListeners.delete(listener);
     };
   }
 

@@ -12,6 +12,9 @@ model User {
   name                String
   username            String            @unique
   phoneNumber         String            @unique
+  email               String?           @unique
+  clerkId             String?           @unique
+  password            String?
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sentMessages        Message[]         @relation("SentMessages")
@@ -23,6 +26,10 @@ model User {
   mmPlayers           MurderMysteryPlayer[]
   blockedUsers        BlockedUser[]     @relation("BlockingUsers")
   blockedByUsers      BlockedUser[]     @relation("BlockedByUsers")
+  favorites           FavoriteUser[]    @relation("UserFavorites")
+  favoritedBy         FavoriteUser[]    @relation("FavoritedByUsers")
+  sentFriendRequests     FriendRequest[]   @relation("SentFriendRequests")
+  receivedFriendRequests FriendRequest[]   @relation("ReceivedFriendRequests")
 
   @@map("users")
 }
@@ -94,6 +101,12 @@ model Message {
   deletedForUserIds    String[]      @default([])
   isEdited             Boolean       @default(false)
   editedAt             DateTime?
+  imageUrl             String?
+  imagePublicId        String?
+  isViewOnce           Boolean       @default(false)
+  isViewed             Boolean       @default(false)
+  viewedAt             DateTime?
+  viewedByUserId       String?
   sender               User          @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
   recipient            User?         @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
   group                Group?        @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -133,6 +146,38 @@ model BlockedUser {
   @@index([blockerId])
   @@index([blockedUserId])
   @@map("blocked_users")
+}
+
+model FavoriteUser {
+  id             String   @id @default(uuid())
+  userId         String
+  favoriteUserId String
+  createdAt      DateTime @default(now())
+
+  user           User     @relation("UserFavorites", fields: [userId], references: [id], onDelete: Cascade)
+  favoriteUser   User     @relation("FavoritedByUsers", fields: [favoriteUserId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, favoriteUserId])
+  @@index([userId])
+  @@index([favoriteUserId])
+  @@map("favorite_users")
+}
+
+model FriendRequest {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  status     String   @default("pending") // "pending" | "accepted" | "declined"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  sender     User     @relation("SentFriendRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User     @relation("ReceivedFriendRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("friend_requests")
 }
 
 
