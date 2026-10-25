@@ -46,7 +46,7 @@ import type {
   GameVoiceStatus,
   FriendRequestInfo,
 } from "@chatapp/shared";
-import { getServerUrl } from "./api";
+import { getServerUrl, getSocketUrl } from "./api";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -190,7 +190,7 @@ class SocketService {
 
     this.setStatus("connecting");
 
-    const serverUrl = getServerUrl();
+    const serverUrl = getSocketUrl();
     console.log(`Connecting Socket.IO to ${serverUrl}...`);
 
     this.socket = io(serverUrl, {

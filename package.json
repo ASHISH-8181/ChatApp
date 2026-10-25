@@ -14,6 +14,8 @@
     "ios": "bun run --filter @chatapp/mobile start --ios",
     "web": "bun run --filter @chatapp/mobile start --web",
     "backend": "bun run --filter @chatapp/backend dev",
+    "backend:build": "bun run --filter @chatapp/backend build",
+    "backend:start": "bun run --filter @chatapp/backend start",
     "db:migrate": "bun run --filter @chatapp/backend db:migrate",
     "db:generate": "bun run --filter @chatapp/backend db:generate",
     "postinstall": "node scripts/patch-expo-audio.js"

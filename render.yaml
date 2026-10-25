@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: chatapp-backend
+    runtime: node
+    plan: free
+    buildCommand: bun install && bun run backend:build
+    startCommand: bun run backend:start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: VERIPHONE_API_KEY
+        value: AD445244531A4D7FB4C9D09609D7B87B

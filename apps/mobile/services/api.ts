@@ -56,6 +56,17 @@ export function getServerUrl(): string {
   return activeServerUrl;
 }
 
+export function getSocketUrl(): string {
+  if (process.env.EXPO_PUBLIC_SOCKET_URL) {
+    let url = process.env.EXPO_PUBLIC_SOCKET_URL.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = `https://${url}`;
+    }
+    return url;
+  }
+  return activeServerUrl;
+}
+
 export function setServerUrl(url: string): void {
   let formatted = url.trim();
   if (formatted.endsWith("/")) {
