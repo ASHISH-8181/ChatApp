@@ -1,0 +1,28 @@
+{
+  "cli": {
+    "version": ">= 12.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "bun": "1.4.3",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "bun": "1.4.3",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "bun": "1.4.3",
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  }
+}

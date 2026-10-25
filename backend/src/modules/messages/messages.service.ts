@@ -1,4 +1,3 @@
-import { prisma } from "../../db/prisma.js";
 import type {
   ChatMessage,
   ChatUser,
@@ -12,6 +11,7 @@ import type {
   RespondInvitationPayload,
   SendMessagePayload,
 } from "@chatapp/shared";
+import { prisma } from "../../db/prisma.js";
 
 export class MessagesService {
   private formatGroup(g: any, pendingInvs?: any[]): GroupChat {
@@ -425,12 +425,12 @@ export class MessagesService {
 
     const where = clean
       ? {
-          OR: [
-            { username: { contains: clean, mode: "insensitive" as const } },
-            { name: { contains: clean, mode: "insensitive" as const } },
-            { phoneNumber: { contains: clean } },
-          ],
-        }
+        OR: [
+          { username: { contains: clean, mode: "insensitive" as const } },
+          { name: { contains: clean, mode: "insensitive" as const } },
+          { phoneNumber: { contains: clean } },
+        ],
+      }
       : undefined;
 
     const users = await prisma.user.findMany({
@@ -555,11 +555,11 @@ export class MessagesService {
   async getGroups(userId?: string): Promise<GroupChat[]> {
     const where = userId
       ? {
-          OR: [
-            { members: { some: { userId } } },
-            { createdById: userId },
-          ],
-        }
+        OR: [
+          { members: { some: { userId } } },
+          { createdById: userId },
+        ],
+      }
       : undefined;
 
     const groups = await prisma.group.findMany({
@@ -822,98 +822,102 @@ export class MessagesService {
   }
 
   async checkChugliStatus(io?: any): Promise<void> {
-    const now = new Date();
+    try {
+      const now = new Date();
 
-    // 1. Expiry & Auto-Delete: Find Chugli groups where expiresAt <= now
-    const expiredGroups = await prisma.group.findMany({
-      where: {
-        isChugli: true,
-        expiresAt: {
-          lte: now,
+      // 1. Expiry & Auto-Delete: Find Chugli groups where expiresAt <= now
+      const expiredGroups = await prisma.group.findMany({
+        where: {
+          isChugli: true,
+          expiresAt: {
+            lte: now,
+          },
         },
-      },
-      select: {
-        id: true,
-        name: true,
-      },
-    });
-
-    for (const g of expiredGroups) {
-      console.log(`[Chugli Timer] 💥 Chugli group "${g.name}" (${g.id}) expired. Auto-deleting!`);
-      if (io) {
-        io.emit("chugli:expired", {
-          groupId: g.id,
-          groupName: g.name,
-        });
-      }
-      try {
-        await prisma.group.delete({ where: { id: g.id } });
-      } catch (err: any) {
-        console.error(`[Chugli Timer] Error deleting expired group ${g.id}:`, err.message);
-      }
-    }
-
-    // 2. Early Warning Notification:
-    // Only check groups that have not yet sent a warning and have not expired
-    const pendingWarningGroups = await prisma.group.findMany({
-      where: {
-        isChugli: true,
-        warningSent: false,
-        expiresAt: {
-          gt: now,
+        select: {
+          id: true,
+          name: true,
         },
-      },
-      select: {
-        id: true,
-        name: true,
-        createdById: true,
-        durationMinutes: true,
-        expiresAt: true,
-        createdAt: true,
-      },
-    });
+      });
 
-    for (const g of pendingWarningGroups) {
-      if (!g.expiresAt) continue;
-      const totalDurationMinutes = g.durationMinutes || 10;
-      const remainingMs = g.expiresAt.getTime() - now.getTime();
-      const remainingMinutes = Math.max(1, Math.round(remainingMs / (60 * 1000)));
-
-      // Scaled warning threshold based on session duration:
-      // - 1-2 min sessions: warn when <= 30 seconds remaining
-      // - 3-10 min sessions: warn when <= 2 minutes remaining
-      // - >10 min sessions: warn when <= 10 minutes remaining
-      let shouldWarn = false;
-      if (totalDurationMinutes <= 2) {
-        shouldWarn = remainingMs <= 30 * 1000;
-      } else if (totalDurationMinutes <= 10) {
-        shouldWarn = remainingMs <= 2 * 60 * 1000;
-      } else {
-        shouldWarn = remainingMs <= 10 * 60 * 1000;
-      }
-
-      // Do not warn within the first 5 seconds of creation to prevent instantaneous trigger
-      const ageMs = now.getTime() - g.createdAt.getTime();
-      if (ageMs < 5000) {
-        shouldWarn = false;
-      }
-
-      if (shouldWarn) {
-        await prisma.group.update({
-          where: { id: g.id },
-          data: { warningSent: true },
-        });
-
-        console.log(`[Chugli Timer] ⚠️ Expiry warning sent for group "${g.name}" (${g.id}), ${remainingMinutes}m remaining`);
+      for (const g of expiredGroups) {
+        console.log(`[Chugli Timer] 💥 Chugli group "${g.name}" (${g.id}) expired. Auto-deleting!`);
         if (io) {
-          io.emit("chugli:warning", {
+          io.emit("chugli:expired", {
             groupId: g.id,
             groupName: g.name,
-            expiresAt: g.expiresAt.toISOString(),
-            remainingMinutes,
           });
         }
+        try {
+          await prisma.group.delete({ where: { id: g.id } });
+        } catch (err: any) {
+          console.error(`[Chugli Timer] Error deleting expired group ${g.id}:`, err.message);
+        }
       }
+
+      // 2. Early Warning Notification:
+      // Only check groups that have not yet sent a warning and have not expired
+      const pendingWarningGroups = await prisma.group.findMany({
+        where: {
+          isChugli: true,
+          warningSent: false,
+          expiresAt: {
+            gt: now,
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          createdById: true,
+          durationMinutes: true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      for (const g of pendingWarningGroups) {
+        if (!g.expiresAt) continue;
+        const totalDurationMinutes = g.durationMinutes || 10;
+        const remainingMs = g.expiresAt.getTime() - now.getTime();
+        const remainingMinutes = Math.max(1, Math.round(remainingMs / (60 * 1000)));
+
+        // Scaled warning threshold based on session duration:
+        // - 1-2 min sessions: warn when <= 30 seconds remaining
+        // - 3-10 min sessions: warn when <= 2 minutes remaining
+        // - >10 min sessions: warn when <= 10 minutes remaining
+        let shouldWarn = false;
+        if (totalDurationMinutes <= 2) {
+          shouldWarn = remainingMs <= 30 * 1000;
+        } else if (totalDurationMinutes <= 10) {
+          shouldWarn = remainingMs <= 2 * 60 * 1000;
+        } else {
+          shouldWarn = remainingMs <= 10 * 60 * 1000;
+        }
+
+        // Do not warn within the first 5 seconds of creation to prevent instantaneous trigger
+        const ageMs = now.getTime() - g.createdAt.getTime();
+        if (ageMs < 5000) {
+          shouldWarn = false;
+        }
+
+        if (shouldWarn) {
+          await prisma.group.update({
+            where: { id: g.id },
+            data: { warningSent: true },
+          });
+
+          console.log(`[Chugli Timer] ⚠️ Expiry warning sent for group "${g.name}" (${g.id}), ${remainingMinutes}m remaining`);
+          if (io) {
+            io.emit("chugli:warning", {
+              groupId: g.id,
+              groupName: g.name,
+              expiresAt: g.expiresAt.toISOString(),
+              remainingMinutes,
+            });
+          }
+        }
+      }
+    } catch {
+      // Gracefully ignore transient database wake-up / network hiccups in background timer
     }
   }
 

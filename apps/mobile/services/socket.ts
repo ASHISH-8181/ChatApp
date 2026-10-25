@@ -39,6 +39,9 @@ import type {
   RollLudoDicePayload,
   MoveLudoTokenPayload,
   LudoColor,
+  GameChatMessage,
+  GameVoiceChunk,
+  GameVoiceStatus,
 } from "@chatapp/shared";
 import { getServerUrl } from "./api";
 
@@ -85,6 +88,10 @@ type LudoStateListener = (room: LudoGameState) => void;
 type LudoDiceListener = (data: { color: LudoColor; value: number; canMove: boolean }) => void;
 type LudoTokenListener = (data: { color: LudoColor; tokenId: number; step: number; isHome: boolean }) => void;
 
+type GameChatListener = (message: GameChatMessage) => void;
+type GameVoiceChunkListener = (chunk: GameVoiceChunk) => void;
+type GameVoiceStatusListener = (status: GameVoiceStatus) => void;
+
 class SocketService {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
   private status: ConnectionStatus = "disconnected";
@@ -115,6 +122,10 @@ class SocketService {
   private ludoStateListeners = new Set<LudoStateListener>();
   private ludoDiceListeners = new Set<LudoDiceListener>();
   private ludoTokenListeners = new Set<LudoTokenListener>();
+
+  private gameChatListeners = new Set<GameChatListener>();
+  private gameVoiceChunkListeners = new Set<GameVoiceChunkListener>();
+  private gameVoiceStatusListeners = new Set<GameVoiceStatusListener>();
 
   private onlineUserIds: string[] = [];
   private currentUser: ChatUser | null = null;
@@ -262,6 +273,18 @@ class SocketService {
 
     this.socket.on("ludo:tokenMoved", (data) => {
       this.ludoTokenListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("game:chat:message", (message) => {
+      this.gameChatListeners.forEach((l) => l(message));
+    });
+
+    this.socket.on("game:voice:chunk", (chunk) => {
+      this.gameVoiceChunkListeners.forEach((l) => l(chunk));
+    });
+
+    this.socket.on("game:voice:status", (status) => {
+      this.gameVoiceStatusListeners.forEach((l) => l(status));
     });
 
     this.socket.on("message:deleted", (data) => {
@@ -922,6 +945,59 @@ class SocketService {
     this.ludoTokenListeners.add(listener);
     return () => {
       this.ludoTokenListeners.delete(listener);
+    };
+  }
+
+  // ==========================================
+  // IN-GAME LIVE CHAT & VOICE METHODS
+  // ==========================================
+  sendGameChat(payload: {
+    gameType: "chess" | "ludo" | "mm";
+    roomId: string;
+    senderId: string;
+    senderName: string;
+    senderColor?: string;
+    text: string;
+  }): Promise<GameChatMessage> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.socket.connected) return reject(new Error("Socket not connected"));
+      this.socket.emit("game:chat:send", payload, (res) => {
+        if (res.status === "ok" && res.message) resolve(res.message);
+        else reject(new Error(res.status === "error" ? res.message : "Failed to send in-game chat"));
+      });
+    });
+  }
+
+  sendGameVoiceChunk(payload: GameVoiceChunk): void {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit("game:voice:chunk", payload);
+    }
+  }
+
+  sendGameVoiceStatus(payload: GameVoiceStatus): void {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit("game:voice:status", payload);
+    }
+  }
+
+  subscribeToGameChat(listener: GameChatListener): () => void {
+    this.gameChatListeners.add(listener);
+    return () => {
+      this.gameChatListeners.delete(listener);
+    };
+  }
+
+  subscribeToGameVoiceChunk(listener: GameVoiceChunkListener): () => void {
+    this.gameVoiceChunkListeners.add(listener);
+    return () => {
+      this.gameVoiceChunkListeners.delete(listener);
+    };
+  }
+
+  subscribeToGameVoiceStatus(listener: GameVoiceStatusListener): () => void {
+    this.gameVoiceStatusListeners.add(listener);
+    return () => {
+      this.gameVoiceStatusListeners.delete(listener);
     };
   }
 

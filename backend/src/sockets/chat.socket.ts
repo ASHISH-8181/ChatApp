@@ -9,6 +9,7 @@ import type {
   SendMessagePayload,
   ChatUser,
   MarkReadPayload,
+  GameChatMessage,
 } from "@chatapp/shared";
 
 // In-memory active presence tracker (userId -> Set of active socket IDs)
@@ -597,6 +598,51 @@ export function registerChatSocket(
         if (callback) callback({ status: "ok", room: room || undefined });
       } catch (err: any) {
         if (callback) callback({ status: "error", message: err.message });
+      }
+    });
+
+    // ==========================================
+    // IN-GAME LIVE CHAT & VOICE COMMUNICATION
+    // ==========================================
+    socket.on("game:chat:send", (payload, callback) => {
+      try {
+        const message: GameChatMessage = {
+          id: `gmsg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          gameType: payload.gameType,
+          roomId: payload.roomId,
+          senderId: payload.senderId,
+          senderName: payload.senderName,
+          senderColor: payload.senderColor,
+          text: payload.text.trim(),
+          timestamp: Date.now(),
+        };
+
+        io.to(`${payload.gameType}:${payload.roomId}`).emit("game:chat:message", message);
+        if (callback) callback({ status: "ok", message });
+      } catch (err: any) {
+        if (callback) callback({ status: "error", message: err.message });
+      }
+    });
+
+    socket.on("game:voice:chunk", (payload) => {
+      try {
+        const roomName = `${payload.gameType}:${payload.roomId}`;
+        const roomSockets = io.sockets.adapter.rooms.get(roomName);
+        const recipientCount = roomSockets ? roomSockets.size - 1 : 0;
+        console.log(`[Voice] Relayed chunk: ${payload.audioChunk?.length || 0} chars from ${payload.senderName || payload.senderId} to room ${roomName} (${recipientCount} recipients)`);
+        socket.to(roomName).emit("game:voice:chunk", payload);
+      } catch (err: any) {
+        console.error("[Voice] Chunk relay error:", err.message);
+      }
+    });
+
+    socket.on("game:voice:status", (payload) => {
+      try {
+        const roomName = `${payload.gameType}:${payload.roomId}`;
+        console.log(`[Voice] User ${payload.userId} speaking=${payload.isSpeaking} muted=${payload.isMuted} in ${roomName}`);
+        socket.to(roomName).emit("game:voice:status", payload);
+      } catch (err: any) {
+        console.error("[Voice] Status relay error:", err.message);
       }
     });
 

@@ -18,10 +18,15 @@ import type {
   ChatUser,
   ChessColor,
   ChessGameState,
+  GameChatMessage,
 } from "@chatapp/shared";
 import { Ionicons } from "@/components/Icon";
 import { Colors, Fonts } from "@/constants/theme";
 import { socketService } from "@/services/socket";
+import { GameChatBubble } from "@/components/game-comm/GameChatBubble";
+import { GameChatModal } from "@/components/game-comm/GameChatModal";
+import { GameVoiceBar } from "@/components/game-comm/GameVoiceBar";
+import { useGameVoice } from "@/components/game-comm/useGameVoice";
 import {
   coordToAlgebraic,
   findKing,
@@ -47,6 +52,29 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
   const [selectedCoord, setSelectedCoord] = useState<{ row: number; col: number } | null>(null);
   const [legalMoves, setLegalMoves] = useState<MoveOption[]>([]);
   const [copiedCodeNotice, setCopiedCodeNotice] = useState(false);
+
+  // In-Game Live Chat & Voice State
+  const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([]);
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [playerBubbleMessages, setPlayerBubbleMessages] = useState<
+    Record<string, { text: string; senderName: string; senderColor?: string }>
+  >({});
+
+  const {
+    isMuted,
+    isSpeaking,
+    speakingUserIds,
+    toggleMic,
+    isSpeakerMuted,
+    toggleSpeaker,
+  } = useGameVoice({
+    gameType: "chess",
+    roomId: onlineRoom?.roomId || "",
+    userId: currentUser?.id,
+    userName: currentUser?.name,
+    enabled: visible && !!onlineRoom && (onlineRoom.status === "playing" || onlineRoom.status === "waiting"),
+  });
 
   // Pulse animation for waiting room & check banner
   const [pulseAnim] = useState(() => new Animated.Value(1));
@@ -91,6 +119,55 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
       unsubMove();
     };
   }, [visible]);
+
+  // Subscribe to in-game chat messages
+  const currentChessRoomId = onlineRoom?.roomId;
+  useEffect(() => {
+    if (!visible || !currentChessRoomId) return;
+
+    const unsubChat = socketService.subscribeToGameChat((msg) => {
+      if (msg.roomId !== currentChessRoomId) return;
+      setChatMessages((prev) => [...prev, msg]);
+
+      if (!showChatModal && msg.senderId !== currentUser?.id) {
+        setUnreadChatCount((prev) => prev + 1);
+      }
+
+      setPlayerBubbleMessages((prev) => ({
+        ...prev,
+        [msg.senderId]: {
+          text: msg.text,
+          senderName: msg.senderName,
+          senderColor: msg.senderColor,
+        },
+      }));
+
+      setTimeout(() => {
+        setPlayerBubbleMessages((prev) => {
+          const copy = { ...prev };
+          delete copy[msg.senderId];
+          return copy;
+        });
+      }, 5500);
+    });
+
+    return () => {
+      unsubChat();
+    };
+  }, [visible, currentChessRoomId, showChatModal, currentUser?.id]);
+
+  const handleSendChat = (text: string) => {
+    if (!onlineRoom || !currentUser) return;
+    const isWhite = onlineRoom.whitePlayer?.userId === currentUser.id;
+    socketService.sendGameChat({
+      gameType: "chess",
+      roomId: onlineRoom.roomId,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderColor: isWhite ? "#38BDF8" : "#94A3B8",
+      text,
+    });
+  };
 
   // Create room handler
   const handleCreateOnline = async () => {
@@ -275,20 +352,37 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
             style={styles.backButton}
             onPress={confirmLeaveRoom}
           >
-            <Ionicons name="arrow-back" size={22} color="#F8FAFC" />
+            <Ionicons name="arrow-back" size={20} color="#F8FAFC" />
           </TouchableOpacity>
 
           <View style={styles.headerTitleBox}>
-            <Text style={styles.headerTitle}>Chess Online (2P)</Text>
-            <Text style={styles.headerSubtitle}>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {onlineRoom ? `Chess • ${onlineRoom.code}` : "Chess Online"}
+            </Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
               {onlineRoom
-                ? `Room: ${onlineRoom.code} • ${onlineRoom.status === "playing" ? "In Game" : "Waiting"}`
-                : "Live Multiplayer Duel"}
+                ? onlineRoom.status === "playing" ? "In Game Duel" : "Waiting for Player"
+                : "2-Player Duel"}
             </Text>
           </View>
 
-          {/* Spacer to keep title centered, removing duplicate exit button */}
-          <View style={{ width: 40 }} />
+          {/* Right Action: Voice & Chat Communication Bar */}
+          {onlineRoom ? (
+            <GameVoiceBar
+              isMuted={isMuted}
+              isSpeaking={isSpeaking}
+              onToggleMic={toggleMic}
+              isSpeakerMuted={isSpeakerMuted}
+              onToggleSpeaker={toggleSpeaker}
+              onOpenChat={() => {
+                setShowChatModal(true);
+                setUnreadChatCount(0);
+              }}
+              unreadChatCount={unreadChatCount}
+            />
+          ) : (
+            <View style={{ width: 36 }} />
+          )}
         </View>
 
         {/* SCREEN 1: LOBBY (CREATE OR JOIN ROOM) */}
@@ -432,21 +526,43 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
             showsVerticalScrollIndicator={false}
           >
             {/* Top Bar: Opponent Player */}
-            <View style={styles.playerBar}>
+            <View style={[styles.playerBar, { position: "relative", marginTop: 22, zIndex: 100 }]}>
+              {/* Floating Speech Bubble directly above Opponent's name */}
+              {opponentPlayer && playerBubbleMessages[opponentPlayer.userId] && (
+                <GameChatBubble
+                  text={playerBubbleMessages[opponentPlayer.userId].text}
+                  senderName={playerBubbleMessages[opponentPlayer.userId].senderName}
+                  senderColor={playerBubbleMessages[opponentPlayer.userId].senderColor}
+                  onPress={() => {
+                    setShowChatModal(true);
+                    setUnreadChatCount(0);
+                  }}
+                  position="top"
+                />
+              )}
+
               <View style={styles.playerInfoLeft}>
                 <View
                   style={[
                     styles.playerColorDot,
                     {
                       backgroundColor: isWhiteUser ? "#0F172A" : "#FFFFFF",
-                      borderColor: "#475569",
+                      borderColor: (opponentPlayer && speakingUserIds[opponentPlayer.userId]) ? "#10B981" : "#475569",
+                      borderWidth: (opponentPlayer && speakingUserIds[opponentPlayer.userId]) ? 2.5 : 1,
                     },
                   ]}
                 />
                 <View>
-                  <Text style={styles.playerName}>
-                    {opponentPlayer?.name || "Opponent"} ({isWhiteUser ? "Black" : "White"})
-                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={styles.playerName}>
+                      {opponentPlayer?.name || "Opponent"} ({isWhiteUser ? "Black" : "White"})
+                    </Text>
+                    {opponentPlayer && speakingUserIds[opponentPlayer.userId] && (
+                      <View style={styles.speakingBadge}>
+                        <Text style={styles.speakingBadgeText}>🔊 Speaking</Text>
+                      </View>
+                    )}
+                  </View>
                   <Text style={styles.playerSubtitle}>
                     {onlineRoom.turn !== myColor ? "Opponent's turn to move..." : "Waiting for you"}
                   </Text>
@@ -622,21 +738,43 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
             </View>
 
             {/* Bottom Bar: Current User Player */}
-            <View style={styles.playerBar}>
+            <View style={[styles.playerBar, { position: "relative", marginTop: 8, marginBottom: 16, zIndex: 100 }]}>
+              {/* Floating Speech Bubble directly above User's name */}
+              {currentUser && playerBubbleMessages[currentUser.id] && (
+                <GameChatBubble
+                  text={playerBubbleMessages[currentUser.id].text}
+                  senderName={playerBubbleMessages[currentUser.id].senderName}
+                  senderColor={playerBubbleMessages[currentUser.id].senderColor}
+                  onPress={() => {
+                    setShowChatModal(true);
+                    setUnreadChatCount(0);
+                  }}
+                  position="bottom"
+                />
+              )}
+
               <View style={styles.playerInfoLeft}>
                 <View
                   style={[
                     styles.playerColorDot,
                     {
                       backgroundColor: isWhiteUser ? "#FFFFFF" : "#0F172A",
-                      borderColor: "#E2E8F0",
+                      borderColor: isSpeaking ? "#10B981" : "#E2E8F0",
+                      borderWidth: isSpeaking ? 2.5 : 1,
                     },
                   ]}
                 />
                 <View>
-                  <Text style={styles.playerName}>
-                    {mePlayer?.name || "You"} ({isWhiteUser ? "White" : "Black"})
-                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={styles.playerName}>
+                      {mePlayer?.name || "You"} ({isWhiteUser ? "White" : "Black"})
+                    </Text>
+                    {!isMuted && (
+                      <View style={styles.speakingBadge}>
+                        <Text style={styles.speakingBadgeText}>{isSpeaking ? "🎙️ Speaking" : "🎙️ Mic Live"}</Text>
+                      </View>
+                    )}
+                  </View>
                   <Text style={[styles.playerSubtitle, isMyTurn && styles.playerSubtitleActive]}>
                     {isMyTurn ? "YOUR TURN TO MOVE" : "Waiting for opponent move..."}
                   </Text>
@@ -671,6 +809,16 @@ export function ChessModal({ visible, onClose, currentUser }: ChessModalProps) {
             )}
           </ScrollView>
         )}
+
+        {/* In-Game Full Chat Popup Modal */}
+        <GameChatModal
+          visible={showChatModal}
+          onClose={() => setShowChatModal(false)}
+          messages={chatMessages}
+          currentUserId={currentUser?.id}
+          onSendMessage={handleSendChat}
+          title="Chess Duel Chat"
+        />
       </SafeAreaView>
     </Modal>
   );
@@ -685,23 +833,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#1E293B",
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "#1E293B",
     justifyContent: "center",
     alignItems: "center",
   },
   leaveButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "rgba(239, 68, 68, 0.15)",
     justifyContent: "center",
     alignItems: "center",
@@ -709,15 +857,18 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239, 68, 68, 0.3)",
   },
   headerTitleBox: {
-    alignItems: "center",
+    flex: 1,
+    marginHorizontal: 8,
+    alignItems: "flex-start",
+    justifyContent: "center",
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontFamily: Fonts.extraBold,
     color: "#F8FAFC",
   },
   headerSubtitle: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontFamily: Fonts.medium,
     color: "#94A3B8",
     marginTop: 1,
@@ -1119,6 +1270,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: Fonts.bold,
     color: "#EF4444",
+  },
+  speakingBadge: {
+    backgroundColor: "rgba(16, 185, 129, 0.2)",
+    borderWidth: 1,
+    borderColor: "#10B981",
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 8,
+  },
+  speakingBadgeText: {
+    fontSize: 10,
+    fontFamily: Fonts.bold,
+    color: "#34D399",
   },
   boardContainer: {
     borderRadius: 14,

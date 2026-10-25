@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { config } from "./config/index.js";
 import { messagesRouter, usersRouter, groupsRouter } from "./modules/messages/messages.controller.js";
 import { murderMysteryRouter } from "./modules/murder-mystery/murder-mystery.controller.js";
+import { livekitRouter } from "./modules/livekit/livekit.controller.js";
 import { registerChatSocket } from "./sockets/chat.socket.js";
 import type { ClientToServerEvents, ServerToClientEvents } from "@chatapp/shared";
 
@@ -37,6 +38,7 @@ app.route("/api/messages", messagesRouter);
 app.route("/api/users", usersRouter);
 app.route("/api/groups", groupsRouter);
 app.route("/api/murder-mystery", murderMysteryRouter);
+app.route("/api/livekit", livekitRouter);
 
 // 404 handler
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
@@ -76,17 +78,20 @@ import { murderMysteryService } from "./modules/murder-mystery/murder-mystery.se
 registerChatSocket(io);
 
 // Periodic background check for Chugli group warnings, auto-expiry, and Murder Mystery phase transitions
-setInterval(() => {
-  messagesService.checkChugliStatus(io).catch((err) => {
-    if (!err.message?.includes("Can't reach database server")) {
-      console.error("[Chugli Background Check Error]:", err.message);
+let isPeriodicChecking = false;
+setInterval(async () => {
+  if (isPeriodicChecking) return;
+  isPeriodicChecking = true;
+  try {
+    await messagesService.checkChugliStatus(io);
+    await murderMysteryService.checkPhaseTransitions(io);
+  } catch (err: any) {
+    if (!err?.message?.includes("Can't reach database server")) {
+      console.error("[Background Check Error]:", err?.message);
     }
-  });
-  murderMysteryService.checkPhaseTransitions(io).catch((err) => {
-    if (!err.message?.includes("Can't reach database server")) {
-      console.error("[MM Phase Check Error]:", err.message);
-    }
-  });
+  } finally {
+    isPeriodicChecking = false;
+  }
 }, 5000);
 
 export { app, server, io };

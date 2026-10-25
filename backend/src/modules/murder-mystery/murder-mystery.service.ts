@@ -1184,68 +1184,72 @@ export class MurderMysteryService {
    * Automatically executes when phase expires (e.g. night timer ended, voting timer ended)
    */
   async checkPhaseTransitions(io?: any): Promise<void> {
-    const now = new Date();
-    const expiringRooms = await prisma.murderMysteryRoom.findMany({
-      where: {
-        phaseExpiresAt: {
-          lte: now,
+    try {
+      const now = new Date();
+      const expiringRooms = await prisma.murderMysteryRoom.findMany({
+        where: {
+          phaseExpiresAt: {
+            lte: now,
+          },
+          status: {
+            notIn: ["LOBBY", "GAME_OVER"],
+          },
         },
-        status: {
-          notIn: ["LOBBY", "GAME_OVER"],
-        },
-      },
-      include: { players: true },
-    });
+        include: { players: true },
+      });
 
-    for (const room of expiringRooms) {
-      try {
-        switch (room.status) {
-          case "ROLE_REVEAL":
-            // 25s role reveal timeout -> start night
-            await this.startNightPhase(room.id, io);
-            break;
+      for (const room of expiringRooms) {
+        try {
+          switch (room.status) {
+            case "ROLE_REVEAL":
+              // 25s role reveal timeout -> start night
+              await this.startNightPhase(room.id, io);
+              break;
 
-          case "NIGHT_PHASE":
-            // Night action timed out -> advance to healer phase
-            await this.startHealerPhase(room.id, io);
-            break;
+            case "NIGHT_PHASE":
+              // Night action timed out -> advance to healer phase
+              await this.startHealerPhase(room.id, io);
+              break;
 
-          case "HEALER_PHASE":
-            // Healer action timed out -> resolve night
-            await this.resolveNight(room.id, io);
-            break;
+            case "HEALER_PHASE":
+              // Healer action timed out -> resolve night
+              await this.resolveNight(room.id, io);
+              break;
 
-          case "NIGHT_RESULT":
-            // 8s night result shown -> advance to voting
-            await this.startVotingPhase(room.id, io);
-            break;
+            case "NIGHT_RESULT":
+              // 8s night result shown -> advance to voting
+              await this.startVotingPhase(room.id, io);
+              break;
 
-          case "VOTING":
-            // Voting timer expired -> resolve votes
-            await this.resolveVoting(room.id, false, io);
-            break;
+            case "VOTING":
+              // Voting timer expired -> resolve votes
+              await this.resolveVoting(room.id, false, io);
+              break;
 
-          case "RUNOFF_VOTING":
-            // Runoff timer expired -> resolve runoff votes
-            await this.resolveVoting(room.id, true, io);
-            break;
+            case "RUNOFF_VOTING":
+              // Runoff timer expired -> resolve runoff votes
+              await this.resolveVoting(room.id, true, io);
+              break;
 
-          case "VOTING_RESULT":
-            // 7s voting result shown -> check if won, otherwise next round
-            const win = this.checkWinCondition(room);
-            if (win) {
-              await this.endGame(room.id, win, io);
-            } else {
-              await this.advanceNextRound(room.id, io);
-            }
-            break;
+            case "VOTING_RESULT":
+              // 7s voting result shown -> check if won, otherwise next round
+              const win = this.checkWinCondition(room);
+              if (win) {
+                await this.endGame(room.id, win, io);
+              } else {
+                await this.advanceNextRound(room.id, io);
+              }
+              break;
 
-          default:
-            break;
+            default:
+              break;
+          }
+        } catch (err: any) {
+          console.error(`[MM Phase Transition Error room ${room.id}]:`, err.message);
         }
-      } catch (err: any) {
-        console.error(`[MM Phase Transition Error room ${room.id}]:`, err.message);
       }
+    } catch {
+      // Gracefully ignore transient database wake-up / network hiccups in background timer
     }
   }
 }

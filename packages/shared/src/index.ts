@@ -356,6 +356,9 @@ export interface ServerToClientEvents {
   }) => void;
   "user:blocked": (data: { blockerId: string; targetUserId: string }) => void;
   "user:unblocked": (data: { blockerId: string; targetUserId: string }) => void;
+  "game:chat:message": (message: GameChatMessage) => void;
+  "game:voice:chunk": (data: GameVoiceChunk) => void;
+  "game:voice:status": (data: GameVoiceStatus) => void;
   error: (error: { message: string }) => void;
 }
 
@@ -510,6 +513,52 @@ export interface ClientToServerEvents {
     payload: { roomId: string; userId: string },
     callback?: (response: { status: "ok"; room?: LudoGameState } | { status: "error"; message: string }) => void
   ) => void;
+
+  // In-Game Live Chat & Voice Events
+  "game:chat:send": (
+    payload: {
+      gameType: "chess" | "ludo" | "mm";
+      roomId: string;
+      senderId: string;
+      senderName: string;
+      senderColor?: string;
+      text: string;
+    },
+    callback?: (response: { status: "ok"; message?: GameChatMessage } | { status: "error"; message: string }) => void
+  ) => void;
+  "game:voice:chunk": (payload: GameVoiceChunk) => void;
+  "game:voice:status": (payload: GameVoiceStatus) => void;
+}
+
+// ==========================================
+// IN-GAME LIVE CHAT & VOICE TYPES
+// ==========================================
+export interface GameChatMessage {
+  id: string;
+  gameType: "chess" | "ludo" | "mm";
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  senderColor?: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface GameVoiceChunk {
+  gameType: "chess" | "ludo" | "mm";
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  audioChunk: string;
+  mimeType?: string;
+}
+
+export interface GameVoiceStatus {
+  gameType: "chess" | "ludo" | "mm";
+  roomId: string;
+  userId: string;
+  isSpeaking: boolean;
+  isMuted: boolean;
 }
 
 // ==========================================

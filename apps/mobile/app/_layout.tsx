@@ -17,7 +17,18 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
+import { Platform } from "react-native";
 import { UserProvider } from "@/store/user-context";
+
+if (Platform.OS !== "web") {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { registerGlobals } = require("@livekit/react-native");
+    registerGlobals();
+  } catch (e) {
+    console.warn("[LiveKit] registerGlobals error:", e);
+  }
+}
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 

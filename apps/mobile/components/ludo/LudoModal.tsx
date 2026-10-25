@@ -17,12 +17,17 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import type {
   ChatUser,
+  GameChatMessage,
   LudoGameState,
   LudoPlayer,
 } from "@chatapp/shared";
 import { Ionicons } from "@/components/Icon";
 import { Colors, Fonts } from "@/constants/theme";
 import { socketService } from "@/services/socket";
+import { GameChatBubble } from "@/components/game-comm/GameChatBubble";
+import { GameChatModal } from "@/components/game-comm/GameChatModal";
+import { GameVoiceBar } from "@/components/game-comm/GameVoiceBar";
+import { useGameVoice } from "@/components/game-comm/useGameVoice";
 import { LudoBoard } from "./LudoBoard";
 import { LUDO_COLOR_HEX } from "./ludoEngine";
 
@@ -41,6 +46,29 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
   const [isJoiningOnline, setIsJoiningOnline] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [copiedCodeNotice, setCopiedCodeNotice] = useState(false);
+
+  // In-Game Live Chat & Voice State
+  const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([]);
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [playerBubbleMessages, setPlayerBubbleMessages] = useState<
+    Record<string, { text: string; senderName: string; senderColor?: string }>
+  >({});
+
+  const {
+    isMuted,
+    isSpeaking,
+    speakingUserIds,
+    toggleMic,
+    isSpeakerMuted,
+    toggleSpeaker,
+  } = useGameVoice({
+    gameType: "ludo",
+    roomId: onlineRoom?.roomId || "",
+    userId: currentUser?.id,
+    userName: currentUser?.name,
+    enabled: visible && !!onlineRoom && (onlineRoom.status === "playing" || onlineRoom.status === "waiting"),
+  });
 
   // Animation values using useState for React 19 compiler safety
   const [diceRotateAnim] = useState(() => new Animated.Value(0));
@@ -113,6 +141,56 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
       unsubDice();
     };
   }, [visible, triggerDiceAnimation]);
+
+  // Subscribe to in-game chat messages
+  const currentLudoRoomId = onlineRoom?.roomId;
+  useEffect(() => {
+    if (!visible || !currentLudoRoomId) return;
+
+    const unsubChat = socketService.subscribeToGameChat((msg) => {
+      if (msg.roomId !== currentLudoRoomId) return;
+      setChatMessages((prev) => [...prev, msg]);
+
+      if (!showChatModal && msg.senderId !== currentUser?.id) {
+        setUnreadChatCount((prev) => prev + 1);
+      }
+
+      setPlayerBubbleMessages((prev) => ({
+        ...prev,
+        [msg.senderId]: {
+          text: msg.text,
+          senderName: msg.senderName,
+          senderColor: msg.senderColor,
+        },
+      }));
+
+      setTimeout(() => {
+        setPlayerBubbleMessages((prev) => {
+          const copy = { ...prev };
+          delete copy[msg.senderId];
+          return copy;
+        });
+      }, 5500);
+    });
+
+    return () => {
+      unsubChat();
+    };
+  }, [visible, currentLudoRoomId, showChatModal, currentUser?.id]);
+
+  const handleSendChat = (text: string) => {
+    if (!onlineRoom || !currentUser) return;
+    const myPlayer = onlineRoom.players.find((p) => p.userId === currentUser.id);
+    const playerColorHex = myPlayer ? LUDO_COLOR_HEX[myPlayer.color] : "#38BDF8";
+    socketService.sendGameChat({
+      gameType: "ludo",
+      roomId: onlineRoom.roomId,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderColor: playerColorHex,
+      text,
+    });
+  };
 
   // Create Room Handler
   const handleCreateOnline = async () => {
@@ -257,20 +335,37 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
             style={styles.backButton}
             onPress={confirmLeaveRoom}
           >
-            <Ionicons name="arrow-back" size={22} color="#F8FAFC" />
+            <Ionicons name="arrow-back" size={20} color="#F8FAFC" />
           </TouchableOpacity>
 
           <View style={styles.headerTitleBox}>
-            <Text style={styles.headerTitle}>Ludo Club Online</Text>
-            <Text style={styles.headerSubtitle}>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {onlineRoom ? `Ludo • ${onlineRoom.code}` : "Ludo Club"}
+            </Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
               {onlineRoom
-                ? `Room: ${onlineRoom.code} • ${onlineRoom.players.length}/${onlineRoom.maxPlayers} Players`
+                ? `${onlineRoom.players.length}/${onlineRoom.maxPlayers} Players`
                 : "Up to 6 Players Online"}
             </Text>
           </View>
 
-          {/* Spacer to keep title centered, removing duplicate exit button */}
-          <View style={{ width: 40 }} />
+          {/* Right Action: Voice & Chat Communication Bar */}
+          {onlineRoom ? (
+            <GameVoiceBar
+              isMuted={isMuted}
+              isSpeaking={isSpeaking}
+              onToggleMic={toggleMic}
+              isSpeakerMuted={isSpeakerMuted}
+              onToggleSpeaker={toggleSpeaker}
+              onOpenChat={() => {
+                setShowChatModal(true);
+                setUnreadChatCount(0);
+              }}
+              unreadChatCount={unreadChatCount}
+            />
+          ) : (
+            <View style={{ width: 36 }} />
+          )}
         </View>
 
         {/* SCREEN 1: LOBBY (CREATE OR JOIN ROOM) */}
@@ -553,6 +648,12 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
               boardSize={boardSize}
               tokenPulseAnim={tokenPulseAnim}
               onMoveToken={handleMoveToken}
+              playerBubbleMessages={playerBubbleMessages}
+              speakingUserIds={speakingUserIds}
+              onOpenChat={() => {
+                setShowChatModal(true);
+                setUnreadChatCount(0);
+              }}
             />
 
             {/* Dice Rolling & Turn Action Bar */}
@@ -561,13 +662,37 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
               <View
                 style={[
                   styles.activePlayerBadge,
-                  { backgroundColor: LUDO_COLOR_HEX[onlineRoom.currentTurnColor] },
+                  {
+                    backgroundColor: LUDO_COLOR_HEX[onlineRoom.currentTurnColor],
+                    position: "relative",
+                    marginTop: 22,
+                    zIndex: 100,
+                  },
                 ]}
               >
+                {/* Single chat bubble directly above Active Player's name */}
+                {activePlayer && playerBubbleMessages[activePlayer.userId] && (
+                  <GameChatBubble
+                    text={playerBubbleMessages[activePlayer.userId].text}
+                    senderName={playerBubbleMessages[activePlayer.userId].senderName}
+                    senderColor={playerBubbleMessages[activePlayer.userId].senderColor}
+                    onPress={() => {
+                      setShowChatModal(true);
+                      setUnreadChatCount(0);
+                    }}
+                    position="top"
+                  />
+                )}
+
                 <Ionicons name="person" size={16} color="#FFFFFF" />
                 <Text style={styles.activePlayerName}>
                   {`${activePlayer?.name || "Player"}'s Turn`}
                 </Text>
+                {activePlayer && speakingUserIds[activePlayer.userId] && (
+                  <View style={styles.activeSpeakingBadge}>
+                    <Text style={styles.activeSpeakingText}>🔊 Speaking</Text>
+                  </View>
+                )}
               </View>
 
               {/* Animated 3D Dice Box (Always shows dice face) */}
@@ -659,6 +784,16 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
             )}
           </ScrollView>
         )}
+
+        {/* In-Game Full Chat Popup Modal */}
+        <GameChatModal
+          visible={showChatModal}
+          onClose={() => setShowChatModal(false)}
+          messages={chatMessages}
+          currentUserId={currentUser?.id}
+          onSendMessage={handleSendChat}
+          title="Ludo Club Chat"
+        />
       </SafeAreaView>
     </Modal>
   );
@@ -674,10 +809,22 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
         key={player.color}
         style={[
           styles.extraPlayerCard,
-          { borderColor: colorHex },
+          { borderColor: colorHex, position: "relative" },
           isCurrent && styles.extraPlayerCardActive,
         ]}
       >
+        {playerBubbleMessages[player.userId] && (
+          <GameChatBubble
+            text={playerBubbleMessages[player.userId].text}
+            senderName={playerBubbleMessages[player.userId].senderName}
+            senderColor={playerBubbleMessages[player.userId].senderColor}
+            onPress={() => {
+              setShowChatModal(true);
+              setUnreadChatCount(0);
+            }}
+            position="top"
+          />
+        )}
         <View style={styles.baseHeaderRow}>
           <View style={[styles.baseColorSquare, { backgroundColor: colorHex }]} />
           <Text style={styles.basePlayerName} numberOfLines={1}>
@@ -760,23 +907,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#1E293B",
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "#1E293B",
     justifyContent: "center",
     alignItems: "center",
   },
   leaveButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "rgba(239, 68, 68, 0.15)",
     justifyContent: "center",
     alignItems: "center",
@@ -784,15 +931,18 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239, 68, 68, 0.3)",
   },
   headerTitleBox: {
-    alignItems: "center",
+    flex: 1,
+    marginHorizontal: 8,
+    alignItems: "flex-start",
+    justifyContent: "center",
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontFamily: Fonts.extraBold,
     color: "#F8FAFC",
   },
   headerSubtitle: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontFamily: Fonts.medium,
     color: "#94A3B8",
     marginTop: 1,
@@ -1318,6 +1468,18 @@ const styles = StyleSheet.create({
   },
   activePlayerName: {
     fontSize: 13,
+    fontFamily: Fonts.bold,
+    color: "#FFFFFF",
+  },
+  activeSpeakingBadge: {
+    backgroundColor: "#10B981",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginLeft: 4,
+  },
+  activeSpeakingText: {
+    fontSize: 10,
     fontFamily: Fonts.bold,
     color: "#FFFFFF",
   },

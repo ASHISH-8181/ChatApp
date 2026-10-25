@@ -26,6 +26,9 @@ interface LudoBoardProps {
   boardSize: number;
   tokenPulseAnim: Animated.Value;
   onMoveToken: (tokenId: number) => void;
+  playerBubbleMessages?: Record<string, { text: string; senderName: string; senderColor?: string }>;
+  speakingUserIds?: Record<string, boolean>;
+  onOpenChat?: () => void;
 }
 
 export const LudoBoard = React.memo(function LudoBoard({
@@ -34,6 +37,9 @@ export const LudoBoard = React.memo(function LudoBoard({
   boardSize,
   tokenPulseAnim,
   onMoveToken,
+  playerBubbleMessages,
+  speakingUserIds,
+  onOpenChat,
 }: LudoBoardProps) {
   const cellSize = boardSize / 15;
   const yardSize = cellSize * 6;
@@ -322,7 +328,33 @@ export const LudoBoard = React.memo(function LudoBoard({
           {player?.userId === room.adminId && (
             <Text style={styles.hostCrown}>👑</Text>
           )}
+          {player && speakingUserIds && speakingUserIds[player.userId] && (
+            <Text style={styles.speakingMiniBadge}>🔊</Text>
+          )}
         </View>
+
+        {/* Floating Chat Bubble over this Player's Base/Name */}
+        {player && playerBubbleMessages && playerBubbleMessages[player.userId] && (
+          <TouchableOpacity
+            style={[
+              styles.yardChatBubble,
+              { borderColor: playerBubbleMessages[player.userId].senderColor || colorHex },
+            ]}
+            onPress={onOpenChat}
+            activeOpacity={0.85}
+          >
+            <View style={styles.yardBubbleHeader}>
+              <Ionicons name="chatbubble-ellipses" size={10} color="#38BDF8" />
+              <Text style={styles.yardChatSender} numberOfLines={1}>
+                {playerBubbleMessages[player.userId].senderName}
+              </Text>
+            </View>
+            <Text style={styles.yardChatText} numberOfLines={2}>
+              {playerBubbleMessages[player.userId].text}
+            </Text>
+            <Text style={styles.yardChatTapPrompt}>Tap to reply 💬</Text>
+          </TouchableOpacity>
+        )}
 
         {/* 4 Inset Circular Token Nests */}
         <View style={styles.nestGrid}>
@@ -645,6 +677,57 @@ const styles = StyleSheet.create({
   },
   hostCrown: {
     fontSize: 9,
+  },
+  speakingMiniBadge: {
+    fontSize: 9,
+  },
+  yardChatBubble: {
+    position: "absolute",
+    top: 2,
+    left: 2,
+    right: 2,
+    bottom: 2,
+    backgroundColor: "#0F172A",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderWidth: 2,
+    zIndex: 100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+    elevation: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  yardBubbleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 2,
+  },
+  yardChatSender: {
+    fontSize: 9.5,
+    fontFamily: Fonts.extraBold,
+    color: "#CBD5E1",
+    textTransform: "uppercase",
+  },
+  yardChatText: {
+    fontSize: 12,
+    fontFamily: Fonts.extraBold,
+    color: "#FFFFFF",
+    textAlign: "center",
+    lineHeight: 16,
+    textShadowColor: "rgba(0, 0, 0, 0.75)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  yardChatTapPrompt: {
+    fontSize: 8.5,
+    fontFamily: Fonts.bold,
+    color: "#38BDF8",
+    marginTop: 3,
   },
   nestGrid: {
     flex: 1,

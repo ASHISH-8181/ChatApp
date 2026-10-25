@@ -15,11 +15,15 @@
     "web": "bun run --filter @chatapp/mobile start --web",
     "backend": "bun run --filter @chatapp/backend dev",
     "db:migrate": "bun run --filter @chatapp/backend db:migrate",
-    "db:generate": "bun run --filter @chatapp/backend db:generate"
+    "db:generate": "bun run --filter @chatapp/backend db:generate",
+    "postinstall": "node scripts/patch-expo-audio.js"
   },
   "workspaces": [
     "apps/*",
     "backend",
     "packages/*"
-  ]
+  ],
+  "devDependencies": {
+    "eas-cli": "^25.3.0"
+  }
 }
