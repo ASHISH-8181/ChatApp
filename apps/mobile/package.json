@@ -5,6 +5,7 @@
   "dependencies": {
     "@chatapp/shared": "workspace:*",
     "@clerk/expo": "^4.14.1",
+    "@clerk/react": "^6.18.1",
     "@config-plugins/react-native-webrtc": "^15.0.2",
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
