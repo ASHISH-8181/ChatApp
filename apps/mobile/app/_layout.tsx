@@ -1,5 +1,10 @@
 import { useEffect } from "react";
-import { Stack } from "expo-router";
+import {
+  Stack,
+  ThemeProvider as NavigationThemeProvider,
+  DarkTheme,
+  DefaultTheme,
+} from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
@@ -25,7 +30,6 @@ import { DecoyLockProvider } from "@/store/decoy-lock-context";
 import { GlobalDecoyLockView } from "@/components/GlobalDecoyLockView";
 import { tokenCache } from "@/services/tokenCache";
 import { ThemeProvider, useTheme } from "@/store/theme-context";
-import { ThemeProvider as NavigationThemeProvider, DarkTheme, DefaultTheme } from "@react-navigation/native";
 
 WebBrowser.maybeCompleteAuthSession();
 
