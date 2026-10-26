@@ -20,7 +20,36 @@ import type {
 } from "@chatapp/shared";
 
 function resolveDefaultServerUrl(): string {
-  // 1. Try to read the Metro host IP on physical devices / Expo Go (e.g. 192.168.1.15:8083 -> 192.168.1.15:3000)
+  // 1. Explicit environment variable has HIGHEST priority (e.g. Render production URL)
+  const rawEnv = process.env.EXPO_PUBLIC_API_URL;
+  if (rawEnv) {
+    let envUrl = rawEnv.replace(/^["']|["']$/g, "").trim();
+    if (envUrl) {
+      if (envUrl.endsWith("/")) {
+        envUrl = envUrl.slice(0, -1);
+      }
+      // If it's a remote URL (e.g. https://chatapp-05lu.onrender.com), use it directly!
+      if (!envUrl.includes("localhost") && !envUrl.includes("127.0.0.1")) {
+        return envUrl;
+      }
+      // If user explicitly configured localhost/127.0.0.1 on Android, try to map to Metro LAN host IP
+      if (Platform.OS === "android") {
+        const hostUri =
+          Constants.expoConfig?.hostUri ||
+          (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
+          (Constants as any).manifest?.hostUri;
+        if (hostUri) {
+          const ip = hostUri.split(":")[0];
+          if (ip && ip !== "localhost" && ip !== "127.0.0.1") {
+            return `http://${ip}:3000`;
+          }
+        }
+      }
+      return envUrl;
+    }
+  }
+
+  // 2. Fallback to Metro host IP on physical devices / Expo Go if no env var configured
   const hostUri =
     Constants.expoConfig?.hostUri ||
     (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
@@ -33,18 +62,9 @@ function resolveDefaultServerUrl(): string {
     }
   }
 
-  // 2. Explicit environment variable
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    const envUrl = process.env.EXPO_PUBLIC_API_URL.trim();
-    if (Platform.OS === "android" && (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))) {
-      return "http://192.168.1.15:3000";
-    }
-    return envUrl;
-  }
-
-  // 3. Android physical or LAN fallback
+  // 3. Android emulator fallback
   if (Platform.OS === "android") {
-    return "http://192.168.1.15:3000";
+    return "http://10.0.2.2:3000";
   }
 
   return "http://localhost:3000";
@@ -57,12 +77,13 @@ export function getServerUrl(): string {
 }
 
 export function getSocketUrl(): string {
-  if (process.env.EXPO_PUBLIC_SOCKET_URL) {
-    let url = process.env.EXPO_PUBLIC_SOCKET_URL.trim();
+  const socketEnv = process.env.EXPO_PUBLIC_SOCKET_URL;
+  if (socketEnv) {
+    let url = socketEnv.replace(/^["']|["']$/g, "").trim();
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       url = `https://${url}`;
     }
-    return url;
+    return url.endsWith("/") ? url.slice(0, -1) : url;
   }
   return activeServerUrl;
 }
