@@ -10,6 +10,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 
@@ -45,6 +46,17 @@ function formatTime(isoString: string): string {
   }
 }
 
+
+const isEmojiOnly = (text?: string): boolean => {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === "Photo") return false;
+  const stripped = trimmed.replace(
+    /(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Emoji_Modifier_Base}|\p{Emoji_Modifier}|\p{Emoji_Component}|\uFE0F|\u200D|\s)/gu,
+    ""
+  );
+  return stripped.length === 0;
+};
 
 interface ReaderAvatarBadgeProps {
   reader: ReadReceipt;
@@ -119,54 +131,51 @@ function ReaderAvatarBadge({
         />
       </Pressable>
 
-      {/* Floating Expanded Profile Popover on Hover / Tap */}
-      {isHovered && (
-        <View
-          style={[
-            styles.popoverCard,
-            alignRight ? styles.popoverAlignRight : styles.popoverAlignLeft,
-          ]}
-          pointerEvents="none"
-        >
-          {/* Header with avatar, display name, and username */}
-          <View style={styles.popoverHeader}>
-            <UserAvatar
-              name={resolvedName}
-              username={resolvedUsername}
-              avatarUrl={readerAvatarUrl}
-              size={30}
-              fontSize={12}
-              isChugli={isChugli}
-              style={styles.popoverAvatar}
-            />
-            <View style={styles.popoverUserInfo}>
-              <Text style={styles.popoverName} numberOfLines={1}>
-                {resolvedName}
-              </Text>
-              <Text style={styles.popoverUsername} numberOfLines={1}>
-                {resolvedUsername}
-              </Text>
-            </View>
+      {/* Floating Expanded Profile Popover on Hover / Tap - dismissable on outside click */}
+      <Modal
+        visible={isHovered}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsHovered(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setIsHovered(false)}>
+          <View style={styles.popoverBackdrop}>
+            <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+              <View style={styles.popoverCenterCard}>
+                {/* Header with avatar, display name, and username */}
+                <View style={styles.popoverHeader}>
+                  <UserAvatar
+                    name={resolvedName}
+                    username={resolvedUsername}
+                    avatarUrl={readerAvatarUrl}
+                    size={38}
+                    fontSize={15}
+                    isChugli={isChugli}
+                    style={styles.popoverAvatar}
+                  />
+                  <View style={styles.popoverUserInfo}>
+                    <Text style={styles.popoverName} numberOfLines={1}>
+                      {resolvedName}
+                    </Text>
+                    <Text style={styles.popoverUsername} numberOfLines={1}>
+                      {resolvedUsername}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Divider */}
+                <View style={styles.popoverDivider} />
+
+                {/* Read Receipt Status */}
+                <View style={styles.popoverStatusRow}>
+                  <Text style={styles.popoverCheckmark}>✓✓</Text>
+                  <Text style={styles.popoverStatusText}>Read at {readTimeStr}</Text>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-
-          {/* Divider */}
-          <View style={styles.popoverDivider} />
-
-          {/* Read Receipt Status */}
-          <View style={styles.popoverStatusRow}>
-            <Text style={styles.popoverCheckmark}>✓✓</Text>
-            <Text style={styles.popoverStatusText}>Read at {readTimeStr}</Text>
-          </View>
-
-          {/* Caret pointer notch pointing down at the avatar */}
-          <View
-            style={[
-              styles.popoverCaret,
-              alignRight ? styles.popoverCaretRight : styles.popoverCaretLeft,
-            ]}
-          />
-        </View>
-      )}
+        </TouchableWithoutFeedback>
+      </Modal>
     </View>
   );
 }
@@ -260,8 +269,10 @@ export function ChatBubble({
   };
 
   const isDeleted = Boolean(message.isDeletedForEveryone);
+  const isEmojiOnlyMessage = isEmojiOnly(message.text);
   const showQuickTranslate =
     !isDeleted &&
+    !isEmojiOnlyMessage &&
     Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
     !shouldTranslate;
 
@@ -557,9 +568,7 @@ export function ChatBubble({
                   {message.isEdited && !isDeleted ? (
                     <Text style={styles.editedIndicatorMe}>• edited</Text>
                   ) : null}
-                  {!isDeleted &&
-                    Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
-                    !shouldTranslate && (
+                  {showQuickTranslate && (
                       <TouchableOpacity
                         onPress={() => setManualTranslate(true)}
                         style={styles.quickTranslateBtnMe}
@@ -778,9 +787,7 @@ export function ChatBubble({
                     {message.isEdited && !isDeleted ? (
                       <Text style={styles.editedIndicatorOther}>• edited</Text>
                     ) : null}
-                    {!isDeleted &&
-                      Boolean(message.text && message.text !== "Photo" && !isHindiText(message.text)) &&
-                      !shouldTranslate && (
+                    {showQuickTranslate && (
                         <TouchableOpacity
                           onPress={() => setManualTranslate(true)}
                           style={styles.quickTranslateBtnOther}
@@ -882,7 +889,7 @@ export function ChatBubble({
 
             <View style={styles.actionButtonsList}>
               {/* Option: Live Hindi Translation Toggle */}
-              {Boolean(message.text && message.text !== "Photo" && !isDeleted) && (
+              {Boolean(message.text && message.text !== "Photo" && !isDeleted && !isEmojiOnlyMessage) && (
                 <TouchableOpacity
                   style={styles.actionOptionBtn}
                   onPress={() => {
@@ -1277,7 +1284,7 @@ export function ChatBubble({
 
 const styles = StyleSheet.create({
   row: {
-    marginVertical: 4,
+    marginVertical: 5,
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "flex-end",
@@ -1369,12 +1376,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: Fonts.bodyRegular,
     lineHeight: 21,
+    marginBottom: 2,
   },
   textOther: {
     color: Colors.textPrimary,
     fontSize: 15,
     fontFamily: Fonts.bodyRegular,
     lineHeight: 21,
+    marginBottom: 2,
   },
   footerMe: {
     flexDirection: "row",
@@ -1508,6 +1517,27 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 10,
     fontFamily: Fonts.bold,
+  },
+  popoverBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  popoverCenterCard: {
+    width: "82%",
+    maxWidth: 270,
+    backgroundColor: "#0F172A",
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 30,
+    borderWidth: 1,
+    borderColor: "#334155",
   },
 
   /* Popover Floating Profile Card */

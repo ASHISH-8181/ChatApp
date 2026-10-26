@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -37,6 +38,7 @@ import {
 } from "@/services/api";
 import {
   sendChugliWarningNotification,
+  sendChugliInvitationNotification,
   requestNotificationPermission,
 } from "@/services/notification";
 import { mobileCache } from "@/services/cache";
@@ -155,7 +157,7 @@ export default function GroupsTabScreen() {
     }
   }, [showActionsDrawer, drawerSlideAnim]);
 
-  const handleCloseActionsDrawer = () => {
+  const handleCloseActionsDrawer = useCallback(() => {
     Animated.timing(drawerSlideAnim, {
       toValue: 340,
       duration: 180,
@@ -163,7 +165,7 @@ export default function GroupsTabScreen() {
     }).start(() => {
       setShowActionsDrawer(false);
     });
-  };
+  }, [drawerSlideAnim]);
 
   // Chugli (Secret Ephemeral Group) Modal State
   const [showChugliModal, setShowChugliModal] = useState(false);
@@ -576,6 +578,7 @@ export default function GroupsTabScreen() {
         return next;
       });
       setBannerSuccess(`You received an invitation to join "${invitation.groupName}"!`);
+      sendChugliInvitationNotification(invitation.senderName, invitation.groupName, invitation.isChugli);
       setTimeout(() => setBannerSuccess(null), 4500);
     });
 
@@ -750,6 +753,44 @@ export default function GroupsTabScreen() {
       unsubViewOnce();
     };
   }, [currentUser, setRegisteredUsers]);
+
+  // Hardware Back Button (Android) - back navigation from group chat to groups list
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showActionsDrawer) {
+        handleCloseActionsDrawer();
+        return true;
+      }
+      if (showCreateModal) {
+        setShowCreateModal(false);
+        return true;
+      }
+      if (activeGroup) {
+        setActiveGroup(null);
+        return true;
+      }
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => sub.remove();
+  }, [activeGroup, showActionsDrawer, showCreateModal, handleCloseActionsDrawer]);
+
+  // Direct scroll to bottom whenever opening a group chat
+  useEffect(() => {
+    if (activeGroup) {
+      const t1 = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 50);
+      const t2 = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 200);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [activeGroup]);
 
   // Automatically mark unread messages in active group as read
   useEffect(() => {
@@ -1749,6 +1790,12 @@ export default function GroupsTabScreen() {
                   }
                 />
               }
+              onLayout={() => {
+                if (groupMessages.length > 0) {
+                  flatListRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
+              keyboardShouldPersistTaps="handled"
               onContentSizeChange={() => {
                 if (groupMessages.length > 0) {
                   flatListRef.current?.scrollToEnd({ animated: false });

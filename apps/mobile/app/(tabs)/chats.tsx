@@ -2,10 +2,12 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -35,6 +37,7 @@ import { mobileCache } from "@/services/cache";
 import {
   requestNotificationPermission,
   sendFavoriteOnlineNotification,
+  sendFriendRequestNotification,
 } from "@/services/notification";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ChatInput } from "@/components/ChatInput";
@@ -145,6 +148,25 @@ function PulsingOnlineDot({ size = 12, isOnline }: { size?: number; isOnline: bo
   );
 }
 
+// Top-level helpers to preserve React Hook purity
+const generateTempId = () => `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+const getSingleEmojiOnly = (text?: string): string | null => {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === "Photo") return null;
+  const emojiRegex = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/gu;
+  const matches = trimmed.match(emojiRegex);
+  const stripped = trimmed.replace(
+    /(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Emoji_Modifier_Base}|\p{Emoji_Modifier}|\p{Emoji_Component}|\uFE0F|\u200D|\s)/gu,
+    ""
+  );
+  if (matches && matches.length === 1 && stripped.length === 0) {
+    return matches[0];
+  }
+  return null;
+};
+
 export default function ChatsTabScreen() {
   const { currentUser, registeredUsers, setRegisteredUsers } = useUser();
   const { colors, isDark } = useTheme();
@@ -241,11 +263,10 @@ export default function ChatsTabScreen() {
     if (seenAnimatedMessageIdsRef.current.has(msg.id)) return;
     seenAnimatedMessageIdsRef.current.add(msg.id);
 
-    // Regex to match emojis
-    const emojiRegex = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/gu;
-    const matches = msg.text.match(emojiRegex);
-    if (matches && matches.length > 0 && msg.text.trim().length <= 32) {
-      setFloatingEmoji(matches[0]);
+    // Only burst if it's a single emoji message (multiple emojis treated as normal messages)
+    const single = getSingleEmojiOnly(msg.text);
+    if (single) {
+      setFloatingEmoji(single);
     }
   }, []);
 
@@ -594,6 +615,9 @@ export default function ChatsTabScreen() {
       if (!isMounted) return;
       if (req.receiverId === currentUser.id) {
         setIncomingFriendRequests((prev) => [req, ...prev.filter((r) => r.id !== req.id)]);
+        const senderName = req.sender?.name || "Someone";
+        const senderUsername = req.sender?.username || "";
+        sendFriendRequestNotification(senderName, senderUsername);
         if (activeContactRef.current && activeContactRef.current.id === req.senderId) {
           setActiveFriendshipStatus("pending_received");
           setActiveFriendRequestId(req.id);
@@ -658,6 +682,48 @@ export default function ChatsTabScreen() {
       unsubViewOnce();
     };
   }, [currentUser, setRegisteredUsers, triggerFavoriteToast, triggerEmojiBurstIfNew]);
+
+  // Hardware Back Button (Android) - back navigation from chat or modals to contact list
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showAddFriendModal) {
+        setShowAddFriendModal(false);
+        return true;
+      }
+      if (showPhotoPicker) {
+        setShowPhotoPicker(false);
+        return true;
+      }
+      if (expandedImage) {
+        setExpandedImage(null);
+        return true;
+      }
+      if (activeContact) {
+        setActiveContact(null);
+        return true;
+      }
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => sub.remove();
+  }, [activeContact, showAddFriendModal, showPhotoPicker, expandedImage]);
+
+  // Direct scroll to bottom whenever opening a chat
+  useEffect(() => {
+    if (activeContact) {
+      const t1 = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 50);
+      const t2 = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 200);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [activeContact]);
 
   // When activeContact is selected, automatically mark unread messages from that contact as read
   // (Privacy rule: if the contact is blocked, never mark as read so they cannot see read status)
@@ -801,16 +867,43 @@ export default function ChatsTabScreen() {
 
     try {
       setBannerError(null);
-      // Trigger floating burst immediately for sender if emoji present
-      const emojiRegex = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/gu;
-      const matches = text.match(emojiRegex);
-      if (matches && matches.length > 0 && text.trim().length <= 32) {
-        setFloatingEmoji(matches[0]);
+      // Trigger floating burst ONLY if single emoji (multiple emojis treated as normal message)
+      const singleEmoji = getSingleEmojiOnly(text);
+      if (singleEmoji) {
+        setFloatingEmoji(singleEmoji);
       }
-      await socketService.sendMessage(text, { recipientId: activeContact.id });
+
+      const trimmedText = text.trim();
+      const tempId = generateTempId();
+      const optimisticMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.id,
+        senderName: currentUser.name,
+        senderUsername: currentUser.username,
+        recipientId: activeContact.id,
+        text: trimmedText,
+        createdAt: new Date().toISOString(),
+        reads: [],
+        isUploading: false,
+      };
+
+      // Optimistic instant message insertion (perceived 0ms speed)
+      setMessages((prev) => {
+        const next = [...prev, optimisticMsg];
+        mobileCache.setCachedMessages(currentUser.id, next);
+        return next;
+      });
+
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+
+      // Send in background via WebSocket
+      socketService.sendMessage(trimmedText, { recipientId: activeContact.id }).catch((err: any) => {
+        setBannerError(err?.message || "Failed to deliver direct message.");
+      });
     } catch (err: any) {
       setBannerError(err.message || "Failed to deliver direct message.");
-      throw err;
     }
   };
 
@@ -1536,6 +1629,12 @@ export default function ChatsTabScreen() {
                     }
                   />
                 }
+                onLayout={() => {
+                  if (personalMessages.length > 0) {
+                    flatListRef.current?.scrollToEnd({ animated: false });
+                  }
+                }}
+                keyboardShouldPersistTaps="handled"
                 onContentSizeChange={() => {
                   if (personalMessages.length > 0) {
                     flatListRef.current?.scrollToEnd({ animated: false });
@@ -1698,8 +1797,13 @@ export default function ChatsTabScreen() {
 
           {/* Stories section removed */}
 
-          {/* Quick Presence, Friends & Ignored Filters */}
-          <View style={styles.filtersRow}>
+          {/* Quick Presence, Friends & Ignored Filters - Horizontally Slideable */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filtersScrollContent}
+            style={styles.filtersScrollView}
+          >
             {/* Filter 1: All Users */}
             <TouchableOpacity
               style={[
@@ -1834,7 +1938,7 @@ export default function ChatsTabScreen() {
                 Ignored ({ignoredUsers.length})
               </Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
 
           {/* Contacts / Users Direct Message List */}
           <FlatList
@@ -3065,6 +3169,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: Fonts.medium,
     textAlign: "center",
+  },
+  filtersScrollView: {
+    flexGrow: 0,
+    maxHeight: 56,
+  },
+  filtersScrollContent: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+    alignItems: "center",
   },
   filtersRow: {
     flexDirection: "row",

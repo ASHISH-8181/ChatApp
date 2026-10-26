@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  BackHandler,
   ScrollView,
   StyleSheet,
   Text,
@@ -45,6 +46,28 @@ export default function GamesTabScreen() {
     });
     return () => unsub();
   }, []);
+
+  // Hardware Back Button (Android)
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showMurderMysteryModal) {
+        setShowMurderMysteryModal(false);
+        return true;
+      }
+      if (showChessModal) {
+        setShowChessModal(false);
+        return true;
+      }
+      if (showLudoModal) {
+        setShowLudoModal(false);
+        return true;
+      }
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => sub.remove();
+  }, [showMurderMysteryModal, showChessModal, showLudoModal]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={["top"]}>
