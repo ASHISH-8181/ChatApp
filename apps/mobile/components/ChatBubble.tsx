@@ -20,6 +20,7 @@ import { Fonts, Colors } from "@/constants/theme";
 import { Ionicons } from "@/components/Icon";
 import { translateToHindi, getCachedHindi, isHindiText } from "@/services/translation";
 import { UserAvatar } from "@/components/UserAvatar";
+import { VoiceNoteBubble } from "@/components/VoiceNoteBubble";
 import { useTheme } from "@/store/theme-context";
 
 interface ChatBubbleProps {
@@ -67,7 +68,7 @@ interface ReaderAvatarBadgeProps {
   isChugli?: boolean;
 }
 
-function ReaderAvatarBadge({
+export function ReaderAvatarBadge({
   reader,
   isMe,
   members,
@@ -349,6 +350,17 @@ export function ChatBubble({
   );
   const hasReaders = readers.length > 0;
 
+  const isVoiceNote = Boolean(
+    (message.text && message.text.startsWith("Voice note")) ||
+    (message.imageUrl &&
+      (message.imageUrl.endsWith(".mp4") ||
+        message.imageUrl.endsWith(".m4a") ||
+        message.imageUrl.endsWith(".mp3") ||
+        message.imageUrl.endsWith(".webm") ||
+        message.imageUrl.includes("/audio/") ||
+        message.imageUrl.startsWith("data:audio/")))
+  );
+
   const deletedByName =
     message.deletedByUsername ||
     senderDisplayUsername ||
@@ -499,6 +511,13 @@ export function ChatBubble({
                     <Text style={styles.textMe}>{message.text}</Text>
                   ) : null}
                 </View>
+              ) : isVoiceNote ? (
+                /* Voice Note Message */
+                <VoiceNoteBubble
+                  audioUrl={message.imageUrl || ""}
+                  durationLabel={message.text?.match(/\((.*?)\)/)?.[1] || "0:05"}
+                  isMe={true}
+                />
               ) : message.imageUrl ? (
                 /* Standard Photo Message */
                 <View style={styles.imageBubbleContent}>
@@ -561,69 +580,62 @@ export function ChatBubble({
               <View style={styles.footerMe}>
                 <View style={styles.timeAndEditRow}>
                   {timeStr ? (
-                    <Text style={isDeleted ? styles.timeMeDeleted : styles.timeMe}>
+                    <Text
+                      style={isDeleted ? styles.timeMeDeleted : styles.timeMe}
+                      numberOfLines={1}
+                    >
                       {timeStr}
                     </Text>
                   ) : null}
                   {message.isEdited && !isDeleted ? (
-                    <Text style={styles.editedIndicatorMe}>• edited</Text>
+                    <Text style={styles.editedIndicatorMe} numberOfLines={1}>• edited</Text>
                   ) : null}
-                  {showQuickTranslate && (
-                      <TouchableOpacity
-                        onPress={() => setManualTranslate(true)}
-                        style={styles.quickTranslateBtnMe}
-                        activeOpacity={0.7}
-                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                        accessibilityLabel="Translate to Hindi"
-                      >
-                        <Ionicons name="language" size={11} color="rgba(255,255,255,0.9)" />
-                        <Text style={styles.quickTranslateTextMe}>हिन्दी</Text>
-                      </TouchableOpacity>
-                    )}
+                  {showQuickTranslate && !isVoiceNote && (
+                    <TouchableOpacity
+                      onPress={() => setManualTranslate(true)}
+                      style={styles.quickTranslateBtnMe}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                      accessibilityLabel="Translate to Hindi"
+                    >
+                      <Ionicons name="language" size={11} color="rgba(255,255,255,0.9)" />
+                      <Text style={styles.quickTranslateTextMe}>हिन्दी</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 {!isDeleted && (
-                  <>
+                  <View style={styles.statusRow}>
                     {message.isUploading ? (
-                      <View style={styles.uploadingStatusRow}>
-                        <ActivityIndicator size={10} color="#BFDBFE" />
-                        <Text style={styles.uploadingTextMe}>Sending...</Text>
-                      </View>
+                      <ActivityIndicator size={10} color="#BFDBFE" />
                     ) : !hasReaders ? (
-                      <View style={styles.statusRow}>
-                        <Text style={styles.singleCheck}>✓</Text>
-                        <Text style={styles.statusText}>Sent</Text>
-                      </View>
+                      <Ionicons name="checkmark" size={13} color="#BFDBFE" />
                     ) : (
-                      <View style={styles.readersGroupMe}>
-                        <Text style={styles.doubleCheck}>✓✓</Text>
-                        <View style={styles.avatarsRow}>
-                          {readers.slice(0, 5).map((reader) => (
-                            <ReaderAvatarBadge
-                              key={reader.userId}
-                              reader={reader}
-                              isMe={true}
-                              members={members}
-                              users={users}
-                              alignRight={true}
-                              isChugli={isChugli}
-                            />
-                          ))}
-                          {readers.length > 5 && (
-                            <TouchableOpacity
-                              onPress={() => setShowReadersModal(true)}
-                              style={styles.moreBadgeMe}
-                              activeOpacity={0.7}
-                            >
-                              <Text style={styles.moreBadgeTextMe}>
-                                +{readers.length - 5}
-                              </Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
+                      <View style={styles.readStatusInlineWrap}>
+                        <Ionicons name="checkmark-done" size={14} color="#38BDF8" />
+                        {readers.slice(0, 3).map((reader) => (
+                          <ReaderAvatarBadge
+                            key={reader.userId}
+                            reader={reader}
+                            isMe={isMe}
+                            members={members}
+                            users={users}
+                            isChugli={isChugli}
+                          />
+                        ))}
+                        {readers.length > 3 && (
+                          <TouchableOpacity
+                            onPress={() => setShowReadersModal(true)}
+                            activeOpacity={0.7}
+                            style={styles.moreReadersPill}
+                            hitSlop={4}
+                          >
+                            <Text style={styles.moreReadersPillText}>+{readers.length - 3}</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     )}
-                  </>
+                  </View>
                 )}
               </View>
             </Pressable>
@@ -727,6 +739,13 @@ export function ChatBubble({
                       <Text style={styles.textOther}>{message.text}</Text>
                     ) : null}
                   </View>
+                ) : isVoiceNote ? (
+                  /* Voice Note Message */
+                  <VoiceNoteBubble
+                    audioUrl={message.imageUrl || ""}
+                    durationLabel={message.text?.match(/\((.*?)\)/)?.[1] || "0:05"}
+                    isMe={false}
+                  />
                 ) : message.imageUrl ? (
                   /* Standard Photo Message */
                   <View style={styles.imageBubbleContent}>
@@ -787,49 +806,19 @@ export function ChatBubble({
                     {message.isEdited && !isDeleted ? (
                       <Text style={styles.editedIndicatorOther}>• edited</Text>
                     ) : null}
-                    {showQuickTranslate && (
-                        <TouchableOpacity
-                          onPress={() => setManualTranslate(true)}
-                          style={styles.quickTranslateBtnOther}
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                          accessibilityLabel="Translate to Hindi"
-                        >
-                          <Ionicons name="language" size={11} color={Colors.primary} />
-                          <Text style={styles.quickTranslateTextOther}>हिन्दी</Text>
-                        </TouchableOpacity>
-                      )}
+                    {showQuickTranslate && !isVoiceNote && (
+                      <TouchableOpacity
+                        onPress={() => setManualTranslate(true)}
+                        style={styles.quickTranslateBtnOther}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                        accessibilityLabel="Translate to Hindi"
+                      >
+                        <Ionicons name="language" size={11} color={Colors.primary} />
+                        <Text style={styles.quickTranslateTextOther}>हिन्दी</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
-
-                  {!isDeleted && hasReaders && (
-                    <View style={styles.readersGroupOther}>
-                      <Text style={styles.doubleCheckOther}>✓✓</Text>
-                      <View style={styles.avatarsRow}>
-                        {readers.slice(0, 5).map((reader) => (
-                          <ReaderAvatarBadge
-                            key={reader.userId}
-                            reader={reader}
-                            isMe={false}
-                            members={members}
-                            users={users}
-                            alignRight={false}
-                            isChugli={isChugli}
-                          />
-                        ))}
-                        {readers.length > 5 && (
-                          <TouchableOpacity
-                            onPress={() => setShowReadersModal(true)}
-                            style={styles.moreBadgeOther}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.moreBadgeTextOther}>
-                              +{readers.length - 5}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    </View>
-                  )}
                 </View>
               </Pressable>
 
@@ -1348,10 +1337,10 @@ const styles = StyleSheet.create({
   bubbleMe: {
     backgroundColor: Colors.primary,
     borderBottomRightRadius: 4,
-    minWidth: 135,
+    minWidth: 148,
   },
   bubbleMeEdited: {
-    minWidth: 165,
+    minWidth: 175,
   },
   bubbleMeSelected: {
     borderWidth: 2,
@@ -1362,10 +1351,10 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 4,
     borderWidth: 1,
     borderColor: Colors.border,
-    minWidth: 120,
+    minWidth: 130,
   },
   bubbleOtherEdited: {
-    minWidth: 145,
+    minWidth: 155,
   },
   bubbleOtherSelected: {
     borderWidth: 2,
@@ -1389,23 +1378,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 5,
-    marginTop: 4,
-    flexWrap: "wrap",
+    gap: 4,
+    marginTop: 3,
+    flexWrap: "nowrap",
+    alignSelf: "flex-end",
   },
   footerOther: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 5,
-    marginTop: 4,
-    flexWrap: "wrap",
+    gap: 4,
+    marginTop: 3,
+    flexWrap: "nowrap",
+    alignSelf: "flex-end",
   },
   timeAndEditRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    flexShrink: 1,
+    gap: 3,
+    flexShrink: 0,
     flexWrap: "nowrap",
   },
   editedIndicatorMe: {
@@ -1437,7 +1428,37 @@ const styles = StyleSheet.create({
   statusRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 3,
+    flexShrink: 0,
+  },
+  readStatusTouch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  readStatusInlineWrap: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 3,
+  },
+  moreReadersPill: {
+    backgroundColor: "rgba(255, 255, 255, 0.22)",
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    marginLeft: 1,
+  },
+  moreReadersPillText: {
+    fontSize: 9,
+    color: "#FFFFFF",
+    fontFamily: Fonts.bold,
+  },
+  readersCountText: {
+    fontSize: 9.5,
+    fontFamily: Fonts.bold,
+    color: "#38BDF8",
+    fontWeight: "700",
   },
   singleCheck: {
     fontSize: 11,

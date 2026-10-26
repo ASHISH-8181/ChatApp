@@ -4,6 +4,7 @@ import {
   Animated,
   BackHandler,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,10 +16,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "expo-router";
+import { useNavigation, useLocalSearchParams } from "expo-router";
 import type { ChatMessage, GroupChat, GroupInvitationInfo } from "@chatapp/shared";
 import { useUser } from "@/store/user-context";
-import { socketService, type ConnectionStatus } from "@/services/socket";
+import { socketService, createTempMessageId, type ConnectionStatus } from "@/services/socket";
 import * as ScreenCapture from "expo-screen-capture";
 import {
   fetchGroups,
@@ -35,6 +36,7 @@ import {
   endChugliSession,
   setChugliMemberAlias,
   uploadImageApi,
+  uploadAudioApi,
 } from "@/services/api";
 import {
   sendChugliWarningNotification,
@@ -54,7 +56,7 @@ import { LockNavButton } from "@/components/LockNavButton";
 import { ThemeNavButton } from "@/components/ThemeNavButton";
 import { useTheme } from "@/store/theme-context";
 import { Ionicons } from "@/components/Icon";
-import { Fonts, Colors } from "@/constants/theme";
+import { Fonts, Colors, getFloatingTabBarStyle } from "@/constants/theme";
 
 export default function GroupsTabScreen() {
   const { currentUser, registeredUsers, setRegisteredUsers } = useUser();
@@ -94,37 +96,11 @@ export default function GroupsTabScreen() {
   // Hide bottom navigation tabs when activeGroup chat is open, restore when leaving
   useEffect(() => {
     navigation.setOptions({
-      tabBarStyle: activeGroup
-        ? { display: "none" }
-        : [
-            {
-              backgroundColor: colors.card,
-              borderTopColor: colors.border,
-              borderTopWidth: 1,
-              height: Platform.OS === "ios" ? 88 : 64,
-              paddingTop: 8,
-              paddingBottom: Platform.OS === "ios" ? 28 : 10,
-              elevation: 10,
-              shadowColor: isDark ? "#000000" : "#0F172A",
-              shadowOpacity: isDark ? 0.25 : 0.05,
-            },
-          ],
+      tabBarStyle: getFloatingTabBarStyle(colors, isDark, Boolean(activeGroup)),
     });
     return () => {
       navigation.setOptions({
-        tabBarStyle: [
-          {
-            backgroundColor: colors.card,
-            borderTopColor: colors.border,
-            borderTopWidth: 1,
-            height: Platform.OS === "ios" ? 88 : 64,
-            paddingTop: 8,
-            paddingBottom: Platform.OS === "ios" ? 28 : 10,
-            elevation: 10,
-            shadowColor: isDark ? "#000000" : "#0F172A",
-            shadowOpacity: isDark ? 0.25 : 0.05,
-          },
-        ],
+        tabBarStyle: getFloatingTabBarStyle(colors, isDark, false),
       });
     };
   }, [activeGroup, navigation, colors, isDark]);
@@ -186,6 +162,43 @@ export default function GroupsTabScreen() {
   const [targetChugliInvite, setTargetChugliInvite] = useState<GroupInvitationInfo | null>(null);
   const [myAliasInput, setMyAliasInput] = useState(generateRandomAlias());
   const [settingAlias, setSettingAlias] = useState(false);
+
+  // Deep linking params from in-app notifications
+  const params = useLocalSearchParams<{ groupId?: string; isChugli?: string; openInviteId?: string }>();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!params.groupId) return;
+      const foundGroup = groups.find((g) => g.id === params.groupId);
+      if (foundGroup) {
+        if (foundGroup.isChugli) {
+          const member = foundGroup.members?.find((m) => m.userId === currentUser?.id);
+          if (member && member.anonymousAlias) {
+            setActiveGroup(foundGroup);
+          } else {
+            setTargetChugliGroup(foundGroup);
+            setTargetChugliInvite(null);
+            setMyAliasInput(generateRandomAlias());
+            setShowAliasModal(true);
+          }
+        } else {
+          setActiveGroup(foundGroup);
+        }
+      } else {
+        const foundInvite = pendingInvitations.find(
+          (i) => i.groupId === params.groupId || i.id === params.openInviteId
+        );
+        if (foundInvite) {
+          if (foundInvite.isChugli) {
+            setTargetChugliInvite(foundInvite);
+            setTargetChugliGroup(null);
+            setMyAliasInput(generateRandomAlias());
+            setShowAliasModal(true);
+          }
+        }
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [params.groupId, params.openInviteId, groups, pendingInvitations, currentUser]);
 
   // Admin 10-Minute Warning / Extend Modal
   const [showWarningModal, setShowWarningModal] = useState(false);
@@ -412,6 +425,17 @@ export default function GroupsTabScreen() {
   // Request notifications permission on start
   useEffect(() => {
     requestNotificationPermission().catch(() => {});
+  }, []);
+
+  // Keep group chat scrolled into view when mobile keyboard opens
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const sub = Keyboard.addListener(showEvent, () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+    });
+    return () => sub.remove();
   }, []);
 
   // Initial load of groups, invitations, messages, and registered users
@@ -772,6 +796,7 @@ export default function GroupsTabScreen() {
       return false;
     };
 
+    if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
     return () => sub.remove();
   }, [activeGroup, showActionsDrawer, showCreateModal, handleCloseActionsDrawer]);
@@ -836,6 +861,33 @@ export default function GroupsTabScreen() {
     };
   }, [activeGroup, currentUser]);
 
+  // WhatsApp-style auto-scroll when keyboard opens or closes in group chat
+  useEffect(() => {
+    if (!activeGroup) return;
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const onKeyboardShow = () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    };
+
+    const onKeyboardHide = () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    };
+
+    const showSub = Keyboard.addListener(showEvent, onKeyboardShow);
+    const hideSub = Keyboard.addListener(hideEvent, onKeyboardHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [activeGroup]);
+
   // Handle Send Message to Group
   const handleSendGroupMessage = async (text: string) => {
     if (!activeGroup) return;
@@ -845,6 +897,77 @@ export default function GroupsTabScreen() {
     } catch (err: any) {
       setBannerError(err.message || "Failed to deliver group message.");
       throw err;
+    }
+  };
+
+  // Handle Send Voice Note to Group
+  const handleSendGroupVoiceNote = async (data: { uri: string; base64?: string; duration: number }) => {
+    if (!activeGroup || !currentUser) return;
+    try {
+      setBannerError(null);
+      const tempId = createTempMessageId();
+      const durationMin = Math.floor(data.duration / 60);
+      const durationSec = data.duration % 60;
+      const durationFormatted = `${durationMin}:${durationSec < 10 ? "0" : ""}${durationSec}`;
+      const captionText = `Voice note (${durationFormatted})`;
+
+      const optimisticMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.id,
+        senderName: activeGroup.isChugli ? (myChugliAlias || "Anonymous") : currentUser.name,
+        senderUsername: activeGroup.isChugli ? "secret" : currentUser.username,
+        groupId: activeGroup.id,
+        text: captionText,
+        imageUrl: data.uri,
+        createdAt: new Date().toISOString(),
+        reads: [],
+        isUploading: true,
+        clientTempId: tempId,
+      };
+
+      setMessages((prev) => [...prev, optimisticMsg]);
+
+      (async () => {
+        try {
+          let uploadUrl = data.uri;
+          let publicId: string | undefined;
+
+          if (data.base64) {
+            const uploadRes = await uploadAudioApi(data.base64, "chatapp/audio");
+            uploadUrl = uploadRes.url;
+            publicId = uploadRes.publicId;
+          }
+
+          const confirmedMsg = await socketService.sendMessage(captionText, {
+            groupId: activeGroup.id,
+            imageUrl: uploadUrl,
+            imagePublicId: publicId,
+            clientTempId: tempId,
+          });
+
+          setMessages((prev) => {
+            const alreadyHasConfirmed = prev.some((m) => m.id === confirmedMsg.id);
+            if (alreadyHasConfirmed) {
+              return prev.filter((m) => m.id !== tempId);
+            }
+            return prev.map((m) =>
+              m.id === tempId
+                ? {
+                    ...confirmedMsg,
+                    imageUrl: confirmedMsg.imageUrl || data.uri,
+                    isUploading: false,
+                  }
+                : m
+            );
+          });
+        } catch (err: any) {
+          console.error("Failed to upload/send group voice note:", err);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          setBannerError(err?.message || "Failed to deliver voice note.");
+        }
+      })();
+    } catch (err: any) {
+      setBannerError(err?.message || "Failed to start sending voice note.");
     }
   };
 
@@ -1615,7 +1738,7 @@ export default function GroupsTabScreen() {
                   </Text>
                 </View>
 
-                {activeGroup.createdById === currentUser.id ? (
+                {isActiveGroupAdmin ? (
                   <View style={styles.adminActionGroup}>
                     <TouchableOpacity
                       style={styles.extendBannerBtn}
@@ -1719,8 +1842,8 @@ export default function GroupsTabScreen() {
           {/* Group Messages Stream */}
           <KeyboardAvoidingView
             style={styles.keyboardContainer}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 25}
           >
             {/* Subtle Background Confidential Watermark */}
             {activeGroup.isChugli && (
@@ -1806,6 +1929,7 @@ export default function GroupsTabScreen() {
             {/* Group Message Input */}
             <ChatInput
               onSend={handleSendGroupMessage}
+              onSendAudio={handleSendGroupVoiceNote}
               onPressCamera={() => setShowPhotoPicker(true)}
               disabled={connectionStatus !== "connected"}
               placeholder={
@@ -1980,7 +2104,7 @@ export default function GroupsTabScreen() {
             <FlatList
               data={filteredGroups}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.groupsListContent}
+              contentContainerStyle={[styles.groupsListContent, { paddingBottom: 100 }]}
               renderItem={({ item }) => {
                 const onlineCount = item.members.filter((m) =>
                   onlineUserIds.includes(m.userId)
@@ -3459,7 +3583,7 @@ export default function GroupsTabScreen() {
           activeOpacity={1}
           onPress={() => setShowGroupOptionsMenu(false)}
         >
-          <View style={styles.optionsModalCard}>
+          <View style={[styles.optionsModalCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}>
             <View style={styles.optionsModalHeader}>
               <View style={styles.optionsModalHeaderLeft}>
                 <View
@@ -3473,10 +3597,10 @@ export default function GroupsTabScreen() {
                   </Text>
                 </View>
                 <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.optionsModalTitle} numberOfLines={1}>
+                  <Text style={[styles.optionsModalTitle, { color: colors.textPrimary }]} numberOfLines={1}>
                     {activeGroup?.name}
                   </Text>
-                  <Text style={styles.optionsModalSub}>
+                  <Text style={[styles.optionsModalSub, { color: colors.textSecondary }]}>
                     {activeGroup?.isChugli ? "Chugli Secret Chat" : `${activeGroup?.members.length || 0} members`}
                   </Text>
                 </View>
@@ -3485,11 +3609,11 @@ export default function GroupsTabScreen() {
                 onPress={() => setShowGroupOptionsMenu(false)}
                 style={styles.optionsCloseBtn}
               >
-                <Ionicons name="close" size={20} color="#64748B" />
+                <Ionicons name="close" size={20} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.optionsMenuDivider} />
+            <View style={[styles.optionsMenuDivider, { backgroundColor: colors.border }]} />
 
             {/* Option 1: Group Details */}
             <TouchableOpacity
@@ -3500,14 +3624,14 @@ export default function GroupsTabScreen() {
               }}
               activeOpacity={0.7}
             >
-              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#EFF6FF" }]}>
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: isDark ? "rgba(37, 99, 235, 0.2)" : "#EFF6FF" }]}>
                 <Ionicons name="people-outline" size={18} color="#2563EB" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.optionsMenuItemTitle}>Group Details</Text>
-                <Text style={styles.optionsMenuItemSub}>View members & invitations</Text>
+                <Text style={[styles.optionsMenuItemTitle, { color: colors.textPrimary }]}>Group Details</Text>
+                <Text style={[styles.optionsMenuItemSub, { color: colors.textSecondary }]}>View members & invitations</Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </TouchableOpacity>
 
             {/* Option 2: Invite Members */}
@@ -3519,14 +3643,14 @@ export default function GroupsTabScreen() {
               }}
               activeOpacity={0.7}
             >
-              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#F0FDF4" }]}>
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: isDark ? "rgba(22, 163, 74, 0.2)" : "#F0FDF4" }]}>
                 <Ionicons name="person-add-outline" size={18} color="#16A34A" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.optionsMenuItemTitle}>Invite Members</Text>
-                <Text style={styles.optionsMenuItemSub}>Add more users to this group</Text>
+                <Text style={[styles.optionsMenuItemTitle, { color: colors.textPrimary }]}>Invite Members</Text>
+                <Text style={[styles.optionsMenuItemSub, { color: colors.textSecondary }]}>Add more users to this group</Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </TouchableOpacity>
 
             {/* Option 3: Clear Chat */}
@@ -3538,14 +3662,14 @@ export default function GroupsTabScreen() {
               }}
               activeOpacity={0.7}
             >
-              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#FEF3C7" }]}>
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: isDark ? "rgba(217, 119, 6, 0.2)" : "#FEF3C7" }]}>
                 <Ionicons name="trash-bin-outline" size={18} color="#D97706" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.optionsMenuItemTitle, { color: "#D97706" }]}>Clear Chat</Text>
-                <Text style={styles.optionsMenuItemSub}>Delete messages for you</Text>
+                <Text style={[styles.optionsMenuItemSub, { color: colors.textSecondary }]}>Delete messages for you</Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </TouchableOpacity>
 
             {/* Option 4: Exit Group */}
@@ -3557,14 +3681,14 @@ export default function GroupsTabScreen() {
               }}
               activeOpacity={0.7}
             >
-              <View style={[styles.optionsMenuIconBox, { backgroundColor: "#FEE2E2" }]}>
+              <View style={[styles.optionsMenuIconBox, { backgroundColor: isDark ? "rgba(220, 38, 38, 0.2)" : "#FEE2E2" }]}>
                 <Ionicons name="log-out-outline" size={18} color="#DC2626" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.optionsMenuItemTitle, { color: "#DC2626" }]}>Exit Group</Text>
-                <Text style={styles.optionsMenuItemSub}>Leave this conversation</Text>
+                <Text style={[styles.optionsMenuItemSub, { color: colors.textSecondary }]}>Leave this conversation</Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </TouchableOpacity>
 
             {/* Option 5: Delete Group (Admin only) */}
@@ -3581,10 +3705,10 @@ export default function GroupsTabScreen() {
                   <Ionicons name="trash" size={18} color="#FFFFFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.optionsMenuItemTitle, { color: "#991B1B" }]}>Delete Group</Text>
-                  <Text style={styles.optionsMenuItemSub}>Permanent deletion for all members</Text>
+                  <Text style={[styles.optionsMenuItemTitle, { color: "#EF4444" }]}>Delete Group</Text>
+                  <Text style={[styles.optionsMenuItemSub, { color: colors.textSecondary }]}>Permanent deletion for all members</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
               </TouchableOpacity>
             ) : null}
           </View>

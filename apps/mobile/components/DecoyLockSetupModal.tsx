@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Image } from "expo-image";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@/components/Icon";
@@ -287,37 +288,104 @@ export function DecoyLockSetupModal() {
 
                     {/* Uploaded Document Status / Card */}
                     {selectedDoc ? (
-                      <View style={styles.selectedDocCard}>
-                        <View
-                          style={[
-                            styles.selectedDocIconBox,
-                            selectedDoc.type === "image"
-                              ? { backgroundColor: "#EFF6FF" }
-                              : { backgroundColor: "#F5F3FF" },
-                          ]}
-                        >
-                          <Ionicons
-                            name={selectedDoc.type === "image" ? "image" : "document-text"}
-                            size={22}
-                            color={selectedDoc.type === "image" ? "#2563EB" : "#7C3AED"}
-                          />
+                      <View style={styles.selectedDocWrapper}>
+                        <View style={styles.selectedDocCard}>
+                          <View
+                            style={[
+                              styles.selectedDocIconBox,
+                              selectedDoc.type === "image"
+                                ? { backgroundColor: "#EFF6FF" }
+                                : { backgroundColor: "#F5F3FF" },
+                            ]}
+                          >
+                            <Ionicons
+                              name={selectedDoc.type === "image" ? "image" : "document-text"}
+                              size={22}
+                              color={selectedDoc.type === "image" ? "#2563EB" : "#7C3AED"}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.selectedDocName} numberOfLines={1}>
+                              {selectedDoc.name}
+                            </Text>
+                            <Text style={styles.selectedDocSub}>
+                              {selectedDoc.type === "image" ? "Custom Image Ready" : "Custom PDF Ready"}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.removeDocBtn}
+                            onPress={() => setSelectedDoc(null)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityLabel="Remove document"
+                          >
+                            <Ionicons name="close-circle" size={22} color="#94A3B8" />
+                          </TouchableOpacity>
                         </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.selectedDocName} numberOfLines={1}>
-                            {selectedDoc.name}
-                          </Text>
-                          <Text style={styles.selectedDocSub}>
-                            {selectedDoc.type === "image" ? "Custom Image Ready" : "Custom PDF Ready"}
-                          </Text>
+
+                        {/* Live Visual Preview */}
+                        <View style={styles.livePreviewContainer}>
+                          <View style={styles.livePreviewHeader}>
+                            <View style={styles.livePreviewHeaderDot} />
+                            <Text style={styles.livePreviewTitle}>Preview of Uploaded Disguise</Text>
+                            <View style={styles.livePreviewBadge}>
+                              <Text style={styles.livePreviewBadgeText}>
+                                {selectedDoc.type === "image" ? "Photo Disguise" : "PDF Disguise"}
+                              </Text>
+                            </View>
+                          </View>
+
+                          {selectedDoc.type === "image" ? (
+                            <View style={styles.previewImageCard}>
+                              <Image
+                                source={{ uri: selectedDoc.uri }}
+                                style={styles.previewImageThumb}
+                                contentFit="cover"
+                                transition={200}
+                              />
+                              <View style={styles.previewImageOverlayBar}>
+                                <Ionicons name="eye-outline" size={13} color="#FFFFFF" />
+                                <Text style={styles.previewImageOverlayText}>
+                                  This image will disguise the screen when locked
+                                </Text>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={styles.previewDocSheet}>
+                              <View style={styles.previewDocHeaderRow}>
+                                <View style={styles.previewDocIconWrap}>
+                                  <Ionicons name="document-text" size={20} color="#DC2626" />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.previewDocName} numberOfLines={1}>
+                                    {selectedDoc.name}
+                                  </Text>
+                                  <Text style={styles.previewDocSub}>
+                                    Official Document • Read Only Disguise
+                                  </Text>
+                                </View>
+                                <View style={styles.pdfTag}>
+                                  <Text style={styles.pdfTagText}>PDF</Text>
+                                </View>
+                              </View>
+
+                              {/* Authentic Document Visual Preview Rows */}
+                              <View style={styles.docPreviewPaper}>
+                                <View style={styles.docSkeletonLineLarge} />
+                                <View style={styles.docSkeletonLineMed} />
+                                <View style={styles.docSkeletonLineFull} />
+                                <View style={styles.docSkeletonLineFull} />
+                                <View style={styles.docSkeletonLineThreeFourth} />
+
+                                <View style={styles.docStampBox}>
+                                  <Ionicons name="checkmark-circle" size={14} color="#15803D" />
+                                  <Text style={styles.docStampText}>
+                                    Document Ready for Decoy Mode
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+                          )}
                         </View>
-                        <TouchableOpacity
-                          style={styles.removeDocBtn}
-                          onPress={() => setSelectedDoc(null)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityLabel="Remove document"
-                        >
-                          <Ionicons name="close-circle" size={22} color="#94A3B8" />
-                        </TouchableOpacity>
                       </View>
                     ) : (
                       <View style={styles.emptyDocPrompt}>
@@ -400,16 +468,6 @@ export function DecoyLockSetupModal() {
                       <Ionicons name="lock-closed" size={18} color="#FFFFFF" />
                       <Text style={styles.lockActionBtnText}>Save & Lock App Now</Text>
                     </TouchableOpacity>
-
-                    {isAlreadyConfigured && (
-                      <TouchableOpacity
-                        style={styles.secondaryTextBtn}
-                        onPress={() => setMode("quick_lock")}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.secondaryTextBtnText}>Back to Quick Lock</Text>
-                      </TouchableOpacity>
-                    )}
                   </View>
                 )}
               </ScrollView>
@@ -552,6 +610,164 @@ const styles = StyleSheet.create({
   },
   removeDocBtn: {
     padding: 4,
+  },
+  selectedDocWrapper: {
+    gap: 10,
+  },
+  livePreviewContainer: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 12,
+    gap: 10,
+  },
+  livePreviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  livePreviewHeaderDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#7C3AED",
+  },
+  livePreviewTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+    flex: 1,
+  },
+  livePreviewBadge: {
+    backgroundColor: "#EDE9FE",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  livePreviewBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#6D28D9",
+  },
+  previewImageCard: {
+    borderRadius: 10,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    position: "relative",
+    backgroundColor: "#0F172A",
+  },
+  previewImageThumb: {
+    width: "100%",
+    height: 140,
+  },
+  previewImageOverlayBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(15, 23, 42, 0.75)",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  previewImageOverlayText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  previewDocSheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 12,
+    gap: 10,
+  },
+  previewDocHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  previewDocIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#FEF2F2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  previewDocName: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  previewDocSub: {
+    fontSize: 10,
+    color: "#64748B",
+  },
+  pdfTag: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  pdfTagText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#DC2626",
+  },
+  docPreviewPaper: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#EEF2F6",
+    gap: 6,
+  },
+  docSkeletonLineLarge: {
+    height: 10,
+    backgroundColor: "#CBD5E1",
+    borderRadius: 4,
+    width: "45%",
+    marginBottom: 4,
+  },
+  docSkeletonLineMed: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    width: "70%",
+  },
+  docSkeletonLineFull: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    width: "100%",
+  },
+  docSkeletonLineThreeFourth: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    width: "80%",
+  },
+  docStampBox: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#DCFCE7",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+  },
+  docStampText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#15803D",
   },
   emptyDocPrompt: {
     flexDirection: "row",

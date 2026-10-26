@@ -163,3 +163,38 @@ export let Colors: ThemeColors = lightColors;
 export function setActiveColors(colors: ThemeColors) {
   Colors = colors;
 }
+
+import { Platform } from "react-native";
+
+export function getFloatingTabBarStyle(
+  colors: ThemeColors,
+  isDark: boolean,
+  isHidden: boolean = false
+) {
+  if (isHidden) {
+    return { display: "none" as const };
+  }
+  return {
+    position: "absolute" as const,
+    left: 18,
+    right: 18,
+    bottom: Platform.OS === "ios" ? 26 : 20,
+    backgroundColor: colors.card,
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: isDark ? "rgba(255,255,255,0.12)" : colors.border,
+    borderTopColor: isDark ? "rgba(255,255,255,0.12)" : colors.border,
+    borderTopWidth: 1,
+    height: Platform.OS === "ios" ? 64 : 58,
+    paddingTop: 0,
+    paddingBottom: 0,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-around" as const,
+    elevation: 14,
+    shadowColor: isDark ? "#000000" : "#0F172A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.35 : 0.08,
+    shadowRadius: 18,
+  };
+}

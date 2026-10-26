@@ -47,10 +47,74 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
     fill: false,
     strokeWidth: 2,
   },
+  "lock-closed": {
+    d: "M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z",
+    fill: true,
+  },
   "lock-closed-outline": {
     d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
     fill: false,
     strokeWidth: 2,
+  },
+  pause: {
+    d: "M6 19h4V5H6v14zm8-14v14h4V5h-4z",
+    fill: true,
+  },
+  "pause-outline": {
+    d: "M10 4H6v16h4V4zm8 0h-4v16h4V4z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  "pause-circle": {
+    d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z",
+    fill: true,
+  },
+  sunny: {
+    d: "M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0s-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0s-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41s-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41s-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z",
+    fill: true,
+  },
+  sun: {
+    d: "M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 0 0-1.41 0 1 1 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 0 0-1.41 0 1 1 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41a.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41a.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z",
+    fill: true,
+  },
+  "sunny-outline": {
+    d: "M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  moon: {
+    d: "M12.3 2a10 10 0 0 0-.19 1.4 10 10 0 0 0 10.89 9.9 10 10 0 1 1-10.7-11.3z",
+    fill: true,
+  },
+  "moon-outline": {
+    d: "M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  call: {
+    d: "M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-2.2 2.2a15.057 15.057 0 0 1-6.59-6.59l2.2-2.21a.96.96 0 0 0 .25-1.01A11.36 11.36 0 0 1 8.57 3.9c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1 0 9.39 7.61 17 17 17 .55 0 1-.45 1-1v-3.51c0-.56-.45-1.01-.99-1.01z",
+    fill: true,
+  },
+  "call-outline": {
+    d: "M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  phone: {
+    d: "M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-2.2 2.2a15.057 15.057 0 0 1-6.59-6.59l2.2-2.21a.96.96 0 0 0 .25-1.01A11.36 11.36 0 0 1 8.57 3.9c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1 0 9.39 7.61 17 17 17 .55 0 1-.45 1-1v-3.51c0-.56-.45-1.01-.99-1.01z",
+    fill: true,
+  },
+  checkmark: {
+    d: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+    fill: true,
+  },
+  "checkmark-done": {
+    d: "M17.3 6.3a1 1 0 0 0-1.4-1.4l-6.9 6.9-2.6-2.6a1 1 0 0 0-1.4 1.4l3.3 3.3a1 1 0 0 0 1.4 0l7.6-7.6zm4.7 0a1 1 0 0 0-1.4-1.4l-7.6 7.6 1.4 1.4 7.6-7.6z",
+    fill: true,
+  },
+  "checkmark-circle": {
+    d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z",
+    fill: true,
   },
   "logo-google": {
     d: "M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09zM12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23zM5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63zM12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z",
@@ -136,16 +200,8 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
   },
 
   // Security & Credentials
-  "lock-closed": {
-    d: "M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 5a3 3 0 0 1 6 0v3H9V7zm3 7a2 2 0 0 1 2 2c0 .74-.4 1.38-1 1.72V19a1 1 0 1 1-2 0v-1.28c-.6-.34-1-.98-1-1.72a2 2 0 0 1 2-2z",
-    fill: true,
-  },
   "shield-checkmark": {
     d: "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z",
-    fill: true,
-  },
-  "checkmark-circle": {
-    d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z",
     fill: true,
   },
   "alert-circle": {
@@ -161,11 +217,6 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
   },
   "log-out-outline": {
     d: "M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v1",
-    fill: false,
-    strokeWidth: 2,
-  },
-  "call-outline": {
-    d: "M3 5a2 2 0 0 1 2-2h3.28a1 1 0 0 1 .948.684l1.498 4.493a1 1 0 0 1-.502 1.21l-2.257 1.13a11.042 11.042 0 0 0 5.516 5.516l1.13-2.257a1 1 0 0 1 1.21-.502l4.493 1.498a1 1 0 0 1 .684.949V19a2 2 0 0 1-2 2h-1C9.716 21 3 14.284 3 6V5z",
     fill: false,
     strokeWidth: 2,
   },
@@ -222,6 +273,20 @@ const SVG_PATHS: Record<string, { d: string; fill?: boolean; strokeWidth?: numbe
   send: {
     d: "M2.01 21L23 12 2.01 3 2 10l15 2-15 2z",
     fill: true,
+  },
+  mic: {
+    d: "M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z",
+    fill: true,
+  },
+  "mic-outline": {
+    d: "M19 11a7 7 0 0 1-7 7m0 0a7 7 0 0 1-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 0 1-3-3V5a3 3 0 1 1 6 0v6a3 3 0 0 1-3 3z",
+    fill: false,
+    strokeWidth: 2,
+  },
+  "mic-off": {
+    d: "M19 11a7 7 0 0 1-7 7m0 0a7 7 0 0 1-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 0 1-3-3V5a3 3 0 1 1 6 0v6a3 3 0 0 1-3 3zM1 1l22 22",
+    fill: false,
+    strokeWidth: 2,
   },
   "people-outline": {
     d: "M17 20h5v-2a3 3 0 0 0-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 0 1 5.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 0 1 9.288 0M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM7 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0z",
@@ -435,15 +500,40 @@ const GLYPH_FALLBACKS: Record<string, string> = {
   "flash-outline": "⚡",
   heart: "❤️",
   "heart-outline": "🤍",
+  mic: "🎤",
+  "mic-outline": "🎤",
+  "mic-off": "🔇",
+  pause: "⏸",
+  "pause-outline": "⏸",
+  "pause-circle": "⏸",
+  sunny: "☀️",
+  sun: "☀️",
+  "sunny-outline": "☀️",
+  moon: "🌙",
+  "moon-outline": "🌙",
+  call: "📞",
+  phone: "📞",
+  "phone-outline": "📞",
+  "lock-closed-outline": "🔒",
+  checkmark: "✓",
+  "checkmark-done": "✓✓",
+  "document-text": "📄",
+  document: "📄",
 };
 
 function getSmartGlyph(name: string): string {
   if (GLYPH_FALLBACKS[name]) return GLYPH_FALLBACKS[name];
   const lower = name.toLowerCase();
+  if (lower.includes("pause")) return "⏸";
+  if (lower.includes("sun") || lower.includes("light")) return "☀️";
+  if (lower.includes("moon") || lower.includes("dark") || lower.includes("night")) return "🌙";
+  if (lower.includes("call") || lower.includes("phone")) return "📞";
+  if (lower.includes("mic") || lower.includes("voice") || lower.includes("record") || lower.includes("audio")) return "🎤";
   if (lower.includes("camera") || lower.includes("photo") || lower.includes("picture")) return "📷";
   if (lower.includes("happy") || lower.includes("smile") || lower.includes("emoji")) return "😊";
   if (lower.includes("keypad") || lower.includes("keyboard")) return "⌨️";
   if (lower.includes("download") || lower.includes("save")) return "⬇️";
+  if (lower.includes("document") || lower.includes("pdf") || lower.includes("file")) return "📄";
   if (lower.includes("image")) return "🖼️";
   if (lower.includes("sparkle")) return "✨";
   if (lower.includes("flash") || lower.includes("lightning")) return "⚡";

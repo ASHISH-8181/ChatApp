@@ -709,12 +709,26 @@ class SocketService {
     });
   }
 
-  unfriendUser(userId: string, targetUserId: string): Promise<void> {
+  unfriendUser(userId: string, targetUserId: string, options?: { signal?: AbortSignal }): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (options?.signal?.aborted) {
+        return reject(new Error("Operation aborted"));
+      }
       if (!this.socket || !this.socket.connected) {
         return reject(new Error("Socket not connected"));
       }
+      const onAbort = () => {
+        reject(new Error("Operation aborted"));
+      };
+      if (options?.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       this.socket.emit("friend:unfriend", { userId, targetUserId }, (res) => {
+        if (options?.signal) {
+          options.signal.removeEventListener("abort", onAbort);
+        }
+        if (options?.signal?.aborted) return;
         if (res && res.status === "ok") {
           resolve();
         } else {
@@ -725,12 +739,26 @@ class SocketService {
     });
   }
 
-  setContactAlias(userId: string, targetUserId: string, customName: string): Promise<{ customName: string }> {
+  setContactAlias(userId: string, targetUserId: string, customName: string, options?: { signal?: AbortSignal }): Promise<{ customName: string }> {
     return new Promise((resolve, reject) => {
+      if (options?.signal?.aborted) {
+        return reject(new Error("Operation aborted"));
+      }
       if (!this.socket || !this.socket.connected) {
         return reject(new Error("Socket not connected"));
       }
+      const onAbort = () => {
+        reject(new Error("Operation aborted"));
+      };
+      if (options?.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       this.socket.emit("user:alias:set", { userId, targetUserId, customName }, (res) => {
+        if (options?.signal) {
+          options.signal.removeEventListener("abort", onAbort);
+        }
+        if (options?.signal?.aborted) return;
         if (res && res.status === "ok") {
           resolve({ customName: res.customName });
         } else {
@@ -1273,3 +1301,9 @@ class SocketService {
 }
 
 export const socketService = new SocketService();
+
+let tempCounter = 0;
+export function createTempMessageId(): string {
+  tempCounter = (tempCounter + 1) % 1000000;
+  return `temp-${Date.now()}-${tempCounter}`;
+}

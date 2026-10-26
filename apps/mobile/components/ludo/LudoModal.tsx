@@ -714,7 +714,7 @@ export function LudoModal({ visible, onClose, currentUser }: LudoModalProps) {
                     },
                   ]}
                 >
-                  {renderDicePips(onlineRoom.diceValue || 6)}
+                  {renderDicePips(onlineRoom.diceValue ?? onlineRoom.lastDiceValue ?? 6)}
                 </Animated.View>
               </TouchableOpacity>
 

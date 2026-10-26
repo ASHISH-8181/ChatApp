@@ -760,6 +760,24 @@ export async function uploadImageApi(
   };
 }
 
+export async function uploadAudioApi(
+  base64OrDataUri: string,
+  folder = "chatapp/audio"
+): Promise<{ url: string; publicId: string }> {
+  const url = `${getServerUrl()}/api/upload/audio`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ audio: base64OrDataUri, folder }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to upload audio note");
+  return {
+    url: data.url,
+    publicId: data.publicId,
+  };
+}
+
 export async function clearChatApi(params: {
   currentUserId: string;
   recipientId?: string;
@@ -848,13 +866,15 @@ export async function fetchFriendshipStatusApi(
 
 export async function unfriendUserApi(
   userId: string,
-  targetUserId: string
+  targetUserId: string,
+  options?: { signal?: AbortSignal }
 ): Promise<{ success: boolean; targetUserId: string }> {
   const url = `${getServerUrl()}/api/friends/unfriend`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ userId, targetUserId }),
+    signal: options?.signal,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Failed to unfriend user");
@@ -879,13 +899,15 @@ export async function fetchContactAliasesApi(userId: string): Promise<Record<str
 export async function setContactAliasApi(
   userId: string,
   targetUserId: string,
-  customName: string
+  customName: string,
+  options?: { signal?: AbortSignal }
 ): Promise<{ success: boolean; customName: string }> {
   const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}/contact-aliases`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ targetUserId, customName }),
+    signal: options?.signal,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Failed to set custom nickname");
@@ -894,12 +916,14 @@ export async function setContactAliasApi(
 
 export async function deleteContactAliasApi(
   userId: string,
-  targetUserId: string
+  targetUserId: string,
+  options?: { signal?: AbortSignal }
 ): Promise<{ success: boolean }> {
   const url = `${getServerUrl()}/api/users/${encodeURIComponent(userId)}/contact-aliases/${encodeURIComponent(targetUserId)}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: { Accept: "application/json" },
+    signal: options?.signal,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Failed to reset contact name");
@@ -928,5 +952,20 @@ export async function translateMessageApi(
     clearTimeout(timer);
     throw err;
   }
+}
+
+export async function loginUserApi(
+  identifier: string,
+  password?: string
+): Promise<{ user: ChatUser }> {
+  const url = `${getServerUrl()}/api/users/login`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ identifier, password }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Incorrect credentials");
+  return data;
 }
 

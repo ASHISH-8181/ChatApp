@@ -27,7 +27,7 @@ import { useTheme } from "@/store/theme-context";
 import { Fonts } from "@/constants/theme";
 
 export default function ProfileScreen() {
-  const { currentUser, setCurrentUser, serverUrl } = useUser();
+  const { currentUser, setCurrentUser } = useUser();
   const { colors, isDark, theme, setTheme } = useTheme();
   const { signOut } = useClerk();
 
@@ -407,33 +407,6 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* System & Security Info */}
-          <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.textPrimary, fontFamily: Fonts.bold }]}>Account & System Details</Text>
-
-            <View style={styles.infoRow}>
-              <Text style={[styles.infoKey, { color: colors.textSecondary }]}>User ID</Text>
-              <Text style={[styles.infoValueMono, { color: colors.textPrimary }]} numberOfLines={1}>
-                {currentUser.id}
-              </Text>
-            </View>
-
-            <View style={styles.infoRow}>
-              <Text style={[styles.infoKey, { color: colors.textSecondary }]}>Server Backend</Text>
-              <Text style={[styles.infoValue, { color: colors.textPrimary }]} numberOfLines={1}>
-                {serverUrl}
-              </Text>
-            </View>
-
-            <View style={styles.infoRow}>
-              <Text style={[styles.infoKey, { color: colors.textSecondary }]}>Security</Text>
-              <View style={[styles.securityBadge, isDark && { backgroundColor: "#143324" }]}>
-                <Ionicons name="shield-checkmark" size={13} color="#22C55E" />
-                <Text style={[styles.securityText, isDark && { color: "#4ADE80" }]}>PostgreSQL + Prisma Verified</Text>
-              </View>
-            </View>
-          </View>
-
           {/* Sign Out Action */}
           <TouchableOpacity
             style={[styles.signOutButton, isDark && { backgroundColor: "#2D1518", borderColor: "#7F1D1D" }]}
@@ -581,7 +554,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 110,
     gap: 16,
   },
   heroCard: {

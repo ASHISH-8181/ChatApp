@@ -126,7 +126,7 @@ export function registerChatSocket(
         io.emit("chat:message", broadcastMsg);
 
         if (callback) {
-          callback({ status: "ok", message: savedMessage });
+          callback({ status: "ok", message: broadcastMsg });
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Failed to send message";

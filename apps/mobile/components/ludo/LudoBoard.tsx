@@ -49,11 +49,19 @@ export const LudoBoard = React.memo(function LudoBoard({
   const myPlayer = room.players.find((p) => p.userId === currentUserId);
   const isMyTurn = myPlayer && room.currentTurnColor === myPlayer.color;
 
+  // Persisted last roll: stays visible across turn changes until the next roll
+  const shownDice = room.diceValue ?? room.lastDiceValue ?? null;
+  const shownDiceColor = room.diceValue
+    ? room.currentTurnColor
+    : room.lastDiceColor ?? room.currentTurnColor;
+
   // Animation for what comes on the dice shown in Home
   const [homeDiceAnim] = React.useState(() => new Animated.Value(1));
 
+  // Re-animate on every new roll (value or roller may repeat, so key on lastActionText too)
+  const rollKey = `${room.lastDiceColor ?? ""}-${room.lastDiceValue ?? ""}-${room.lastActionText ?? ""}`;
   React.useEffect(() => {
-    if (room.diceValue) {
+    if (shownDice) {
       homeDiceAnim.setValue(0.3);
       Animated.sequence([
         Animated.spring(homeDiceAnim, {
@@ -70,7 +78,8 @@ export const LudoBoard = React.memo(function LudoBoard({
         }),
       ]).start();
     }
-  }, [room.diceValue, homeDiceAnim]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rollKey, homeDiceAnim]);
 
   // Group tokens by their board coordinate to prevent total overlapping on safe stars
   const tokenCoordsMap = new Map<string, { player: LudoPlayer; token: LudoToken }[]>();
@@ -602,13 +611,13 @@ export const LudoBoard = React.memo(function LudoBoard({
               width: cellSize * 1.35,
               height: cellSize * 1.35,
               borderRadius: (cellSize * 1.35) / 2,
-              backgroundColor: room.diceValue
-                ? LUDO_COLOR_HEX[room.currentTurnColor]
+              backgroundColor: shownDice
+                ? LUDO_COLOR_HEX[shownDiceColor]
                 : "#0F172A",
-              borderColor: room.diceValue ? "#FFFFFF" : "#FBBF24",
+              borderColor: shownDice ? "#FFFFFF" : "#FBBF24",
               transform: [{ scale: homeDiceAnim }],
-              shadowColor: room.diceValue
-                ? LUDO_COLOR_HEX[room.currentTurnColor]
+              shadowColor: shownDice
+                ? LUDO_COLOR_HEX[shownDiceColor]
                 : "#FBBF24",
               shadowOpacity: 0.85,
               shadowRadius: 10,
@@ -616,9 +625,9 @@ export const LudoBoard = React.memo(function LudoBoard({
             },
           ]}
         >
-          {room.diceValue ? (
+          {shownDice ? (
             <View style={styles.homeDiceContent}>
-              <Text style={styles.homeDiceNumber}>{room.diceValue}</Text>
+              <Text style={styles.homeDiceNumber}>{shownDice}</Text>
             </View>
           ) : (
             <Ionicons name="trophy" size={cellSize * 0.6} color="#FBBF24" />

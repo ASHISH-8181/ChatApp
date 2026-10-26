@@ -25,6 +25,7 @@ import { DecoyLockProvider } from "@/store/decoy-lock-context";
 import { GlobalDecoyLockView } from "@/components/GlobalDecoyLockView";
 import { tokenCache } from "@/services/tokenCache";
 import { ThemeProvider, useTheme } from "@/store/theme-context";
+import { ThemeProvider as NavigationThemeProvider, DarkTheme, DefaultTheme } from "@react-navigation/native";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -58,8 +59,21 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 function RootNavigation() {
   const { colors, isDark } = useTheme();
 
+  const navTheme = {
+    dark: isDark,
+    colors: {
+      primary: colors.primary,
+      background: colors.background,
+      card: colors.card,
+      text: colors.textPrimary,
+      border: isDark ? "rgba(255,255,255,0.12)" : colors.border,
+      notification: colors.danger,
+    },
+    fonts: isDark ? DarkTheme.fonts : DefaultTheme.fonts,
+  };
+
   return (
-    <>
+    <NavigationThemeProvider value={navTheme}>
       <StatusBar style={isDark ? "light" : "dark"} />
       <Stack
         screenOptions={{
@@ -98,7 +112,7 @@ function RootNavigation() {
         />
       </Stack>
       <GlobalDecoyLockView />
-    </>
+    </NavigationThemeProvider>
   );
 }
 

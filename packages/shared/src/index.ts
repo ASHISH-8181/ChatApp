@@ -797,6 +797,10 @@ export interface LudoGameState {
   lastActionText?: string;
   canRoll: boolean;
   movableTokens: number[]; // token IDs that can move given current dice
+  /** Last rolled value — persists across turn changes until the next roll */
+  lastDiceValue?: number | null;
+  /** Color of the player who made the last roll */
+  lastDiceColor?: LudoColor | null;
 }
 
 export interface CreateLudoRoomPayload {

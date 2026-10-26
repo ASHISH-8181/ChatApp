@@ -101,6 +101,8 @@ export class LudoService {
       lastActionText: `${payload.name} created the room!`,
       canRoll: true,
       movableTokens: [],
+      lastDiceValue: null,
+      lastDiceColor: null,
     };
 
     this.rooms.set(roomId, room);
@@ -179,6 +181,8 @@ export class LudoService {
     room.status = "playing";
     room.currentTurnColor = room.players[0].color;
     room.diceValue = null;
+    room.lastDiceValue = null;
+    room.lastDiceColor = null;
     room.hasRolled = false;
     room.canRoll = true;
     room.movableTokens = [];
@@ -203,6 +207,8 @@ export class LudoService {
     // Fair dice roll 1..6
     const diceValue = Math.floor(Math.random() * 6) + 1;
     room.diceValue = diceValue;
+    room.lastDiceValue = diceValue;
+    room.lastDiceColor = currentPlayer.color;
     room.hasRolled = true;
     room.canRoll = false;
 
@@ -398,6 +404,8 @@ export class LudoService {
     room.hasRolled = false;
     room.canRoll = true;
     room.diceValue = null;
+    room.lastDiceValue = null;
+    room.lastDiceColor = null;
     room.movableTokens = [];
     room.lastActionText = "Game reset! Ready to play.";
 

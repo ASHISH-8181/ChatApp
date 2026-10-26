@@ -34,6 +34,32 @@ export class UploadService {
   }
 
   /**
+   * Upload an audio voice note (base64 or data URI) to Cloudinary
+   */
+  async uploadAudio(
+    dataUriOrBase64: string,
+    folder = "chatapp/audio"
+  ): Promise<{
+    url: string;
+    publicId: string;
+  }> {
+    let fileToUpload = dataUriOrBase64;
+    if (!fileToUpload.startsWith("data:") && !fileToUpload.startsWith("http")) {
+      fileToUpload = `data:audio/mp4;base64,${fileToUpload}`;
+    }
+
+    const result = await cloudinary.uploader.upload(fileToUpload, {
+      folder,
+      resource_type: "auto",
+    });
+
+    return {
+      url: result.secure_url,
+      publicId: result.public_id,
+    };
+  }
+
+  /**
    * Permanently delete an image from Cloudinary after being viewed
    */
   async deleteImage(publicId: string): Promise<boolean> {

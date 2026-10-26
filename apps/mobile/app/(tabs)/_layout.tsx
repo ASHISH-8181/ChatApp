@@ -1,119 +1,115 @@
 import React from "react";
-import { StyleSheet, Platform } from "react-native";
+import { StyleSheet, Platform, View } from "react-native";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@/components/Icon";
-import { Fonts, Colors } from "@/constants/theme";
+import { Colors, getFloatingTabBarStyle } from "@/constants/theme";
 import { useDecoyLock } from "@/store/decoy-lock-context";
-
 import { useTheme } from "@/store/theme-context";
+import { GlobalNotificationToast } from "@/components/GlobalNotificationToast";
 
 export default function TabLayout() {
   const { isLocked } = useDecoyLock();
   const { colors, isDark } = useTheme();
 
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textMuted,
-        tabBarStyle: isLocked
-          ? { display: "none" }
-          : [
-              styles.tabBar,
-              {
-                backgroundColor: colors.card,
-                borderTopColor: colors.border,
-                shadowColor: isDark ? "#000000" : "#0F172A",
-                shadowOpacity: isDark ? 0.25 : 0.05,
-              },
-            ],
-        tabBarLabelStyle: styles.tabBarLabel,
-        tabBarItemStyle: styles.tabBarItem,
-      }}
-    >
-      <Tabs.Screen
-        name="chats"
-        options={{
-          title: "Chats",
-          tabBarLabel: "Chats",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "chatbubbles" : "chatbubbles-outline"}
-              size={23}
-              color={color}
-            />
-          ),
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarShowLabel: false,
+          tabBarActiveTintColor: colors.primary,
+          tabBarInactiveTintColor: colors.textMuted,
+          tabBarStyle: getFloatingTabBarStyle(colors, isDark, isLocked),
+          tabBarItemStyle: styles.tabBarItem,
         }}
-      />
-      <Tabs.Screen
-        name="groups"
-        options={{
-          title: "Groups",
-          tabBarLabel: "Groups",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "people" : "people-outline"}
-              size={23}
-              color={color}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="games"
-        options={{
-          title: "Games",
-          tabBarLabel: "Games",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "game-controller" : "game-controller-outline"}
-              size={23}
-              color={color}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: "Profile",
-          tabBarLabel: "Profile",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "person" : "person-outline"}
-              size={23}
-              color={color}
-            />
-          ),
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="chats"
+          options={{
+            title: "Chats",
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "chatbubbles" : "chatbubbles-outline"}
+                size={24}
+                color={color}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="groups"
+          options={{
+            title: "Groups",
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "people" : "people-outline"}
+                size={24}
+                color={color}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="games"
+          options={{
+            title: "Games",
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "game-controller" : "game-controller-outline"}
+                size={24}
+                color={color}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{
+            title: "Profile",
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "person" : "person-outline"}
+                size={24}
+                color={color}
+              />
+            ),
+          }}
+        />
+      </Tabs>
+      <GlobalNotificationToast />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: Colors.card,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    height: Platform.OS === "ios" ? 88 : 64,
-    paddingTop: 8,
-    paddingBottom: Platform.OS === "ios" ? 28 : 10,
-    elevation: 10,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
+  container: {
+    flex: 1,
   },
-  tabBarLabel: {
-    fontSize: 12,
-    fontFamily: Fonts.semiBold,
-    marginTop: 2,
-    letterSpacing: -0.1,
+  tabBar: {
+    position: "absolute",
+    left: 18,
+    right: 18,
+    bottom: Platform.OS === "ios" ? 26 : 20,
+    backgroundColor: Colors.card,
+    borderRadius: 32,
+    borderWidth: 1,
+    borderTopWidth: 1,
+    height: Platform.OS === "ios" ? 64 : 58,
+    paddingTop: 0,
+    paddingBottom: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    elevation: 14,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
   },
   tabBarItem: {
-    paddingVertical: 2,
+    flex: 1,
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
   },
 });
-

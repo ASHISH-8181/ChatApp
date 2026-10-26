@@ -4,6 +4,7 @@ import {
   Animated,
   BackHandler,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,16 +15,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { ChatMessage, ChatUser, FriendRequestInfo, FriendshipStatus } from "@chatapp/shared";
 import { useUser } from "@/store/user-context";
-import { socketService, type ConnectionStatus } from "@/services/socket";
+import { socketService, createTempMessageId, type ConnectionStatus } from "@/services/socket";
 import {
   fetchMessageHistory,
   fetchAllUsers,
   fetchBlockedUsersApi,
   uploadImageApi,
+  uploadAudioApi,
   fetchFavoriteUserIdsApi,
   toggleFavoriteUserApi,
   clearChatApi,
@@ -32,6 +34,7 @@ import {
   fetchContactAliasesApi,
   setContactAliasApi,
   deleteContactAliasApi,
+  unfriendUserApi,
 } from "@/services/api";
 import { mobileCache } from "@/services/cache";
 import {
@@ -51,7 +54,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorBanner } from "@/components/ErrorBanner";
 import { Ionicons } from "@/components/Icon";
-import { Fonts, Colors } from "@/constants/theme";
+import { Fonts, Colors, getFloatingTabBarStyle } from "@/constants/theme";
 import { ThemeNavButton } from "@/components/ThemeNavButton";
 import { useTheme } from "@/store/theme-context";
 
@@ -77,6 +80,10 @@ function getAvatarPalette(seed: string) {
 
 function createTempPhotoMessageId(): string {
   return `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createTempFriendRequestId(): string {
+  return `temp-req-${Date.now()}`;
 }
 
 // Breathing pulsing online presence badge
@@ -149,7 +156,6 @@ function PulsingOnlineDot({ size = 12, isOnline }: { size?: number; isOnline: bo
 }
 
 // Top-level helpers to preserve React Hook purity
-const generateTempId = () => `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 const getSingleEmojiOnly = (text?: string): string | null => {
   if (!text) return null;
@@ -196,6 +202,20 @@ export default function ChatsTabScreen() {
     activeContactRef.current = activeContact;
   }, [activeContact]);
 
+  const navigation = useNavigation();
+
+  // Hide bottom navigation tabs when activeContact chat is open, restore when leaving
+  useEffect(() => {
+    navigation.setOptions({
+      tabBarStyle: getFloatingTabBarStyle(colors, isDark, Boolean(activeContact)),
+    });
+    return () => {
+      navigation.setOptions({
+        tabBarStyle: getFloatingTabBarStyle(colors, isDark, false),
+      });
+    };
+  }, [activeContact, navigation, colors, isDark]);
+
   // Blocked users state
   const [blockedUserIds, setBlockedUserIds] = useState<string[]>([]);
   const [showBlockModal, setShowBlockModal] = useState(false);
@@ -224,6 +244,17 @@ export default function ChatsTabScreen() {
     });
   }, [toastAnim]);
 
+  // Keep chat scrolled into view when mobile keyboard opens
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const sub = Keyboard.addListener(showEvent, () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+    });
+    return () => sub.remove();
+  }, []);
+
   const triggerFavoriteToast = useCallback(
     (user: { id: string; name: string; username: string }) => {
       setFavoriteToast({ user });
@@ -250,6 +281,18 @@ export default function ChatsTabScreen() {
   const [isClearingChat, setIsClearingChat] = useState(false);
   const [showUnfriendConfirmModal, setShowUnfriendConfirmModal] = useState(false);
   const [isUnfriending, setIsUnfriending] = useState(false);
+  // Cancelable in-flight unfriend operation ref with atomic rollback
+  const unfriendOpRef = useRef<{
+    targetUserId: string;
+    previousFriendIds: string[];
+    previousActiveFriendshipStatus: "none" | "friends" | "pending_sent" | "pending_received";
+    previousActiveFriendRequestId: string | null;
+    previousFavoriteUserIds: string[];
+    previousContactAliases: Record<string, string>;
+    abortController: AbortController;
+    isProcessed: boolean;
+    isCancelled: boolean;
+  } | null>(null);
 
   // Live Hindi Translation state for active chat
   const [liveTranslateHindi, setLiveTranslateHindi] = useState(false);
@@ -268,7 +311,7 @@ export default function ChatsTabScreen() {
     if (single) {
       setFloatingEmoji(single);
     }
-  }, []);
+  }, [setFloatingEmoji]);
 
   // Map contactId -> latest message timestamp (in ms) for recency ordering
   const contactLatestMsgTimeMap = useMemo(() => {
@@ -306,6 +349,23 @@ export default function ChatsTabScreen() {
   const [addFriendError, setAddFriendError] = useState<string | null>(null);
   const [addFriendSuccess, setAddFriendSuccess] = useState<string | null>(null);
 
+  // Deep-link / Notification routing params
+  const params = useLocalSearchParams<{ open?: string; contactId?: string }>();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (params.open === "friendRequests" || params.open === "addFriend") {
+        setShowAddFriendModal(true);
+      }
+      if (params.contactId && registeredUsers.length > 0) {
+        const target = registeredUsers.find((u) => u.id === params.contactId);
+        if (target) {
+          setActiveContact(target);
+        }
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [params.open, params.contactId, registeredUsers]);
+
   // Contact list search and filter: 'all' | 'friends' | 'online' | 'favorites' | 'ignored'
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | "friends" | "online" | "favorites" | "ignored">("all");
@@ -316,6 +376,14 @@ export default function ChatsTabScreen() {
   const [newCustomName, setNewCustomName] = useState("");
   const [isSavingAlias, setIsSavingAlias] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
+  // Cancelable in-flight rename operation ref with atomic rollback
+  const renameOpRef = useRef<{
+    targetUserId: string;
+    previousAliases: Record<string, string>;
+    abortController: AbortController;
+    isProcessed: boolean;
+    isCancelled: boolean;
+  } | null>(null);
 
   // View Once & Photo Sharing state
   const [showPhotoPicker, setShowPhotoPicker] = useState(false);
@@ -473,7 +541,31 @@ export default function ChatsTabScreen() {
 
         // If this matches an optimistic pending message via clientTempId, replace in-place
         if (newMsg.clientTempId) {
-          const tempIdx = prev.findIndex((m) => m.id === newMsg.clientTempId);
+          const tempIdx = prev.findIndex(
+            (m) => m.id === newMsg.clientTempId || m.clientTempId === newMsg.clientTempId
+          );
+          if (tempIdx !== -1) {
+            const next = [...prev];
+            next[tempIdx] = {
+              ...newMsg,
+              imageUrl: next[tempIdx].imageUrl || newMsg.imageUrl,
+              isUploading: false,
+            };
+            mobileCache.setCachedMessages(currentUser.id, next);
+            return next;
+          }
+        }
+
+        // Robust matching for any optimistic pending message from current user
+        if (currentUser && newMsg.senderId === currentUser.id) {
+          const tempIdx = prev.findIndex(
+            (m) =>
+              (m.id.startsWith("temp-") || m.id.startsWith("client-")) &&
+              m.senderId === newMsg.senderId &&
+              m.text === newMsg.text &&
+              ((m.recipientId && m.recipientId === newMsg.recipientId) ||
+                (m.groupId && m.groupId === newMsg.groupId))
+          );
           if (tempIdx !== -1) {
             const next = [...prev];
             next[tempIdx] = {
@@ -705,6 +797,7 @@ export default function ChatsTabScreen() {
       return false;
     };
 
+    if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
     return () => sub.remove();
   }, [activeContact, showAddFriendModal, showPhotoPicker, expandedImage]);
@@ -723,6 +816,33 @@ export default function ChatsTabScreen() {
         clearTimeout(t2);
       };
     }
+  }, [activeContact]);
+
+  // WhatsApp-style auto-scroll when keyboard opens or closes
+  useEffect(() => {
+    if (!activeContact) return;
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const onKeyboardShow = () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    };
+
+    const onKeyboardHide = () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    };
+
+    const showSub = Keyboard.addListener(showEvent, onKeyboardShow);
+    const hideSub = Keyboard.addListener(hideEvent, onKeyboardHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, [activeContact]);
 
   // When activeContact is selected, automatically mark unread messages from that contact as read
@@ -767,6 +887,19 @@ export default function ChatsTabScreen() {
           mobileCache.setCachedMessages(currentUser.id, next);
           return next;
         });
+
+        // Directly scroll down to latest chat on load
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false });
+          }, 30);
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false });
+          }, 150);
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false });
+          }, 350);
+        });
       })
       .catch((err) => {
         console.warn("Failed to fetch direct message history:", err);
@@ -786,7 +919,7 @@ export default function ChatsTabScreen() {
       });
   }, [activeContact, currentUser]);
 
-  // Send Friend Request
+  // Send Friend Request (Directly processed on frontend for fast responsiveness, synced with backend)
   const handleSendFriendRequest = async (targetUsername: string) => {
     if (!currentUser) return;
     const clean = targetUsername.trim().replace(/^@/, "");
@@ -796,16 +929,36 @@ export default function ChatsTabScreen() {
     setAddFriendError(null);
     setAddFriendSuccess(null);
 
+    // Optimistically update frontend state immediately
+    const tempRequestId = createTempFriendRequestId();
+    const targetUser = registeredUsers.find((u) => u.username.toLowerCase() === clean.toLowerCase());
+    const nowIso = new Date().toISOString();
+    const optimisticReq: FriendRequestInfo = {
+      id: tempRequestId,
+      senderId: currentUser.id,
+      receiverId: targetUser?.id || "",
+      status: "pending",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      receiver: targetUser,
+    };
+    setOutgoingFriendRequests((prev) => [optimisticReq, ...prev]);
+    if (activeContact && activeContact.username.toLowerCase() === clean.toLowerCase()) {
+      setActiveFriendshipStatus("pending_sent");
+      setActiveFriendRequestId(tempRequestId);
+    }
+
     try {
       const res = await socketService.sendFriendRequest(currentUser.id, clean);
       if (res.status === "accepted") {
+        setOutgoingFriendRequests((prev) => prev.filter((r) => r.id !== tempRequestId));
         setFriendIds((prev) => Array.from(new Set([...prev, res.receiverId, res.senderId])));
         if (activeContact && (activeContact.id === res.receiverId || activeContact.id === res.senderId)) {
           setActiveFriendshipStatus("friends");
         }
         setAddFriendSuccess(`You are now friends with @${clean}!`);
       } else {
-        setOutgoingFriendRequests((prev) => [res, ...prev.filter((r) => r.id !== res.id)]);
+        setOutgoingFriendRequests((prev) => [res, ...prev.filter((r) => r.id !== tempRequestId && r.id !== res.id)]);
         if (activeContact && activeContact.username.toLowerCase() === clean.toLowerCase()) {
           setActiveFriendshipStatus("pending_sent");
           setActiveFriendRequestId(res.id);
@@ -814,6 +967,12 @@ export default function ChatsTabScreen() {
       }
     } catch (err: any) {
       console.warn("Friend request error:", err.message);
+      // Rollback optimistic request
+      setOutgoingFriendRequests((prev) => prev.filter((r) => r.id !== tempRequestId));
+      if (activeContact && activeContact.username.toLowerCase() === clean.toLowerCase()) {
+        setActiveFriendshipStatus("none");
+        setActiveFriendRequestId(null);
+      }
       setAddFriendError(err.message || "Failed to send friend request.");
       setBannerError(err.message || "Failed to send friend request.");
     } finally {
@@ -821,15 +980,35 @@ export default function ChatsTabScreen() {
     }
   };
 
-  // Respond to Friend Request (Accept or Decline)
+  // Respond to Friend Request (Directly processed on frontend for instant feedback, synced with backend)
   const handleRespondFriendRequest = async (requestId: string, action: "accept" | "declined") => {
     if (!currentUser) return;
     setFriendActionLoading(true);
 
+    const prevIncoming = [...incomingFriendRequests];
+    const prevFriends = [...friendIds];
+    const prevStatus = activeFriendshipStatus;
+    const reqItem = incomingFriendRequests.find((r) => r.id === requestId);
+
+    // Optimistically update frontend immediately
+    setIncomingFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    if (action === "accept" && reqItem) {
+      const otherId = reqItem.senderId === currentUser.id ? reqItem.receiverId : reqItem.senderId;
+      if (otherId) {
+        setFriendIds((prev) => Array.from(new Set([...prev, otherId])));
+        if (activeContact && (activeContact.id === otherId || activeContact.id === reqItem.senderId || activeContact.id === reqItem.receiverId)) {
+          setActiveFriendshipStatus("friends");
+        }
+      }
+    } else if (action === "declined" && reqItem) {
+      if (activeContact && (activeContact.id === reqItem.senderId || activeContact.id === reqItem.receiverId)) {
+        setActiveFriendshipStatus("none");
+        setActiveFriendRequestId(null);
+      }
+    }
+
     try {
       const res = await socketService.respondFriendRequest(requestId, currentUser.id, action);
-      setIncomingFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
-
       if (action === "accept") {
         const otherUserId = res.senderId === currentUser.id ? res.receiverId : res.senderId;
         setFriendIds((prev) => Array.from(new Set([...prev, otherUserId])));
@@ -837,14 +1016,13 @@ export default function ChatsTabScreen() {
           setActiveFriendshipStatus("friends");
         }
         setBannerError(null);
-      } else {
-        if (activeContact && (activeContact.id === res.senderId || activeContact.id === res.receiverId)) {
-          setActiveFriendshipStatus("none");
-          setActiveFriendRequestId(null);
-        }
       }
     } catch (err: any) {
       console.warn("Respond friend request error:", err.message);
+      // Rollback optimistic update
+      setIncomingFriendRequests(prevIncoming);
+      setFriendIds(prevFriends);
+      setActiveFriendshipStatus(prevStatus);
       setBannerError(err.message || "Failed to respond to friend request.");
     } finally {
       setFriendActionLoading(false);
@@ -874,7 +1052,7 @@ export default function ChatsTabScreen() {
       }
 
       const trimmedText = text.trim();
-      const tempId = generateTempId();
+      const tempId = createTempMessageId();
       const optimisticMsg: ChatMessage = {
         id: tempId,
         senderId: currentUser.id,
@@ -885,6 +1063,7 @@ export default function ChatsTabScreen() {
         createdAt: new Date().toISOString(),
         reads: [],
         isUploading: false,
+        clientTempId: tempId,
       };
 
       // Optimistic instant message insertion (perceived 0ms speed)
@@ -898,12 +1077,103 @@ export default function ChatsTabScreen() {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 50);
 
-      // Send in background via WebSocket
-      socketService.sendMessage(trimmedText, { recipientId: activeContact.id }).catch((err: any) => {
-        setBannerError(err?.message || "Failed to deliver direct message.");
-      });
+      // Send in background via WebSocket with clientTempId to avoid duplicate entries
+      socketService
+        .sendMessage(trimmedText, { recipientId: activeContact.id, clientTempId: tempId })
+        .then((confirmedMsg) => {
+          setMessages((prev) => {
+            const alreadyHasConfirmed = prev.some((m) => m.id === confirmedMsg.id);
+            if (alreadyHasConfirmed) {
+              return prev.filter((m) => m.id !== tempId);
+            }
+            return prev.map((m) => (m.id === tempId ? { ...confirmedMsg, isUploading: false } : m));
+          });
+        })
+        .catch((err: any) => {
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          setBannerError(err?.message || "Failed to deliver direct message.");
+        });
     } catch (err: any) {
       setBannerError(err.message || "Failed to deliver direct message.");
+    }
+  };
+
+  // Handle Send Voice Note (Background Upload & WebSocket Delivery)
+  const handleSendPersonalVoiceNote = async (data: { uri: string; base64?: string; duration: number }) => {
+    if (!activeContact || !currentUser) return;
+    try {
+      setBannerError(null);
+      const tempId = createTempMessageId();
+      const durationMin = Math.floor(data.duration / 60);
+      const durationSec = data.duration % 60;
+      const durationFormatted = `${durationMin}:${durationSec < 10 ? "0" : ""}${durationSec}`;
+      const captionText = `Voice note (${durationFormatted})`;
+
+      const optimisticAudioMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.id,
+        senderName: currentUser.name,
+        senderUsername: currentUser.username,
+        recipientId: activeContact.id,
+        text: captionText,
+        imageUrl: data.uri,
+        createdAt: new Date().toISOString(),
+        reads: [],
+        isUploading: true,
+        clientTempId: tempId,
+      };
+
+      setMessages((prev) => {
+        const next = [...prev, optimisticAudioMsg];
+        mobileCache.setCachedMessages(currentUser.id, next);
+        return next;
+      });
+
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+
+      (async () => {
+        try {
+          let uploadUrl = data.uri;
+          let publicId: string | undefined;
+
+          if (data.base64) {
+            const uploadRes = await uploadAudioApi(data.base64, "chatapp/audio");
+            uploadUrl = uploadRes.url;
+            publicId = uploadRes.publicId;
+          }
+
+          const confirmedMsg = await socketService.sendMessage(captionText, {
+            recipientId: activeContact.id,
+            imageUrl: uploadUrl,
+            imagePublicId: publicId,
+            clientTempId: tempId,
+          });
+
+          setMessages((prev) => {
+            const alreadyHasConfirmed = prev.some((m) => m.id === confirmedMsg.id);
+            if (alreadyHasConfirmed) {
+              return prev.filter((m) => m.id !== tempId);
+            }
+            return prev.map((m) =>
+              m.id === tempId
+                ? {
+                    ...confirmedMsg,
+                    imageUrl: confirmedMsg.imageUrl || data.uri,
+                    isUploading: false,
+                  }
+                : m
+            );
+          });
+        } catch (err: any) {
+          console.error("Failed to upload/send voice note:", err);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          setBannerError(err?.message || "Failed to deliver voice note.");
+        }
+      })();
+    } catch (err: any) {
+      setBannerError(err?.message || "Failed to start sending voice note.");
     }
   };
 
@@ -940,96 +1210,252 @@ export default function ChatsTabScreen() {
     }
   };
 
-  // Unfriend contact: deletes friendship, removes from friends list, and disables messaging until re-added
+  // Unfriend contact: directly processed on frontend for fast responsiveness, synced with backend, cancelable in-flight
   const handleUnfriendContact = async () => {
     if (!activeContact || !currentUser) return;
+    const targetUserId = activeContact.id;
+    const previousFriendIds = [...friendIds];
+    const previousActiveFriendshipStatus = activeFriendshipStatus;
+    const previousActiveFriendRequestId = activeFriendRequestId;
+    const previousFavoriteUserIds = [...favoriteUserIds];
+    const previousContactAliases = { ...contactAliases };
+
+    // 1. Optimistically update frontend state immediately
+    const nextFriendIds = previousFriendIds.filter((id) => id !== targetUserId);
+    setFriendIds(nextFriendIds);
+    setActiveFriendshipStatus("none");
+    setActiveFriendRequestId(null);
+    setFavoriteUserIds((prev) => prev.filter((id) => id !== targetUserId));
+    setContactAliases((prev) => {
+      if (!prev[targetUserId]) return prev;
+      const next = { ...prev };
+      delete next[targetUserId];
+      return next;
+    });
+    mobileCache.setCachedFriends(currentUser.id, {
+      friends: friendUsers.filter((u) => nextFriendIds.includes(u.id)),
+      friendIds: nextFriendIds,
+      incomingRequests: incomingFriendRequests,
+      outgoingRequests: outgoingFriendRequests,
+    }).catch(() => {});
+
+    // 2. Track in-flight operation for cancelability and atomic rollback
+    const abortController = new AbortController();
+    unfriendOpRef.current = {
+      targetUserId,
+      previousFriendIds,
+      previousActiveFriendshipStatus,
+      previousActiveFriendRequestId,
+      previousFavoriteUserIds,
+      previousContactAliases,
+      abortController,
+      isProcessed: false,
+      isCancelled: false,
+    };
+    setIsUnfriending(true);
+    setBannerError(null);
+
+    // 3. Process backend sync
     try {
-      setIsUnfriending(true);
-      await socketService.unfriendUser(currentUser.id, activeContact.id);
-      setFriendIds((prev) => prev.filter((id) => id !== activeContact.id));
-      setActiveFriendshipStatus("none");
-      setActiveFriendRequestId(null);
-      setFavoriteUserIds((prev) => prev.filter((id) => id !== activeContact.id));
-      setContactAliases((prev) => {
-        if (!prev[activeContact.id]) return prev;
-        const next = { ...prev };
-        delete next[activeContact.id];
-        return next;
-      });
-      setShowUnfriendConfirmModal(false);
-      setShowOptionsMenu(false);
-      setBannerError(null);
+      try {
+        await socketService.unfriendUser(currentUser.id, targetUserId, { signal: abortController.signal });
+      } catch {
+        if (abortController.signal.aborted) throw new Error("Operation cancelled");
+        await unfriendUserApi(currentUser.id, targetUserId, { signal: abortController.signal });
+      }
+
+      if (unfriendOpRef.current && unfriendOpRef.current.targetUserId === targetUserId) {
+        unfriendOpRef.current.isProcessed = true;
+        if (!unfriendOpRef.current.isCancelled) {
+          setIsUnfriending(false);
+          setShowUnfriendConfirmModal(false);
+          setShowOptionsMenu(false);
+          setBannerError(null);
+        }
+      }
     } catch (err: any) {
-      console.warn("Failed to unfriend:", err);
-      setBannerError(err.message || "Failed to unfriend user");
-    } finally {
+      if (unfriendOpRef.current?.isCancelled || abortController.signal.aborted) {
+        return;
+      }
+      // Server error: rollback state atomically to snapshot!
+      setFriendIds(previousFriendIds);
+      setActiveFriendshipStatus(previousActiveFriendshipStatus);
+      setActiveFriendRequestId(previousActiveFriendRequestId);
+      setFavoriteUserIds(previousFavoriteUserIds);
+      setContactAliases(previousContactAliases);
+      mobileCache.setCachedFriends(currentUser.id, {
+        friends: friendUsers.filter((u) => previousFriendIds.includes(u.id)),
+        friendIds: previousFriendIds,
+        incomingRequests: incomingFriendRequests,
+        outgoingRequests: outgoingFriendRequests,
+      }).catch(() => {});
       setIsUnfriending(false);
+      setBannerError(err.message || "Failed to unfriend user");
     }
   };
 
-  // Save private contact alias (nickname) - Only allowed for friends
+  // Cancel unfriend operation if user presses cancel in middle of processing
+  const handleCancelUnfriendOperation = () => {
+    const op = unfriendOpRef.current;
+    if (op && !op.isProcessed && !op.isCancelled) {
+      // In the middle of unfriend: cancel the operation at that time!
+      op.isCancelled = true;
+      op.abortController.abort();
+      // Atomically restore previous friendship snapshot
+      setFriendIds(op.previousFriendIds);
+      setActiveFriendshipStatus(op.previousActiveFriendshipStatus);
+      setActiveFriendRequestId(op.previousActiveFriendRequestId);
+      setFavoriteUserIds(op.previousFavoriteUserIds);
+      setContactAliases(op.previousContactAliases);
+      if (currentUser) {
+        mobileCache.setCachedFriends(currentUser.id, {
+          friends: friendUsers.filter((u) => op.previousFriendIds.includes(u.id)),
+          friendIds: op.previousFriendIds,
+          incomingRequests: incomingFriendRequests,
+          outgoingRequests: outgoingFriendRequests,
+        }).catch(() => {});
+      }
+      setBannerError("Unfriend operation cancelled.");
+    }
+    // If already processed, cancel should not do anything to maintain consistency and atomicity!
+    setIsUnfriending(false);
+    setShowUnfriendConfirmModal(false);
+  };
+
+  // Save private contact alias (nickname) - directly processed on frontend for fast responsiveness, cancelable in-flight
   const handleSaveContactAlias = async () => {
     if (!currentUser || !renameContactUser) return;
     if (!friendIds.includes(renameContactUser.id)) {
       setAliasError("You can only rename your friends.");
       return;
     }
+    const targetUserId = renameContactUser.id;
+    const previousAliases = { ...contactAliases };
     const clean = newCustomName.trim();
+
+    // 1. Directly process on frontend immediately (optimistic UI)
+    const updated = { ...contactAliases };
+    if (clean) {
+      updated[targetUserId] = clean;
+    } else {
+      delete updated[targetUserId];
+    }
+    setContactAliases(updated);
+    mobileCache.setCachedAliases(currentUser.id, updated).catch(() => {});
+
+    // 2. Track in-flight operation for cancelability and atomic rollback
+    const abortController = new AbortController();
+    renameOpRef.current = {
+      targetUserId,
+      previousAliases,
+      abortController,
+      isProcessed: false,
+      isCancelled: false,
+    };
     setIsSavingAlias(true);
     setAliasError(null);
+
+    // 3. Process backend sync
     try {
-      // Optimistically update local state & persistence
-      const updated = { ...contactAliases };
-      if (clean) {
-        updated[renameContactUser.id] = clean;
-      } else {
-        delete updated[renameContactUser.id];
-      }
-      setContactAliases(updated);
-      await mobileCache.setCachedAliases(currentUser.id, updated);
-
-      // Sync with socket/backend API
       try {
-        await socketService.setContactAlias(currentUser.id, renameContactUser.id, clean);
+        await socketService.setContactAlias(currentUser.id, targetUserId, clean, { signal: abortController.signal });
       } catch {
-        await setContactAliasApi(currentUser.id, renameContactUser.id, clean);
+        if (abortController.signal.aborted) throw new Error("Operation cancelled");
+        await setContactAliasApi(currentUser.id, targetUserId, clean, { signal: abortController.signal });
       }
 
-      setRenameContactUser(null);
-      setNewCustomName("");
+      if (renameOpRef.current && renameOpRef.current.targetUserId === targetUserId) {
+        renameOpRef.current.isProcessed = true;
+        if (!renameOpRef.current.isCancelled) {
+          setIsSavingAlias(false);
+          setRenameContactUser(null);
+          setNewCustomName("");
+          setAliasError(null);
+        }
+      }
     } catch (err: any) {
-      console.warn("Failed to set contact alias:", err);
-      setAliasError(err.message || "Failed to update nickname");
-    } finally {
+      if (renameOpRef.current?.isCancelled || abortController.signal.aborted) {
+        return;
+      }
+      // Server error: rollback state atomically to snapshot!
+      setContactAliases(previousAliases);
+      mobileCache.setCachedAliases(currentUser.id, previousAliases).catch(() => {});
       setIsSavingAlias(false);
+      setAliasError(err.message || "Failed to update nickname");
     }
   };
 
-  // Reset private contact alias to original name
+  // Reset private contact alias to original name - directly processed on frontend, cancelable in-flight
   const handleResetContactAlias = async () => {
     if (!currentUser || !renameContactUser) return;
+    const targetUserId = renameContactUser.id;
+    const previousAliases = { ...contactAliases };
+
+    // 1. Directly process on frontend immediately
+    const updated = { ...contactAliases };
+    delete updated[targetUserId];
+    setContactAliases(updated);
+    mobileCache.setCachedAliases(currentUser.id, updated).catch(() => {});
+
+    // 2. Track in-flight operation
+    const abortController = new AbortController();
+    renameOpRef.current = {
+      targetUserId,
+      previousAliases,
+      abortController,
+      isProcessed: false,
+      isCancelled: false,
+    };
     setIsSavingAlias(true);
     setAliasError(null);
-    try {
-      const updated = { ...contactAliases };
-      delete updated[renameContactUser.id];
-      setContactAliases(updated);
-      await mobileCache.setCachedAliases(currentUser.id, updated);
 
+    // 3. Process backend sync
+    try {
       try {
-        await socketService.setContactAlias(currentUser.id, renameContactUser.id, "");
+        await socketService.setContactAlias(currentUser.id, targetUserId, "", { signal: abortController.signal });
       } catch {
-        await deleteContactAliasApi(currentUser.id, renameContactUser.id);
+        if (abortController.signal.aborted) throw new Error("Operation cancelled");
+        await deleteContactAliasApi(currentUser.id, targetUserId, { signal: abortController.signal });
       }
 
-      setRenameContactUser(null);
-      setNewCustomName("");
+      if (renameOpRef.current && renameOpRef.current.targetUserId === targetUserId) {
+        renameOpRef.current.isProcessed = true;
+        if (!renameOpRef.current.isCancelled) {
+          setIsSavingAlias(false);
+          setRenameContactUser(null);
+          setNewCustomName("");
+          setAliasError(null);
+        }
+      }
     } catch (err: any) {
-      console.warn("Failed to reset contact alias:", err);
-      setAliasError(err.message || "Failed to reset name");
-    } finally {
+      if (renameOpRef.current?.isCancelled || abortController.signal.aborted) {
+        return;
+      }
+      // Server error: rollback state atomically!
+      setContactAliases(previousAliases);
+      mobileCache.setCachedAliases(currentUser.id, previousAliases).catch(() => {});
       setIsSavingAlias(false);
+      setAliasError(err.message || "Failed to reset name");
     }
+  };
+
+  // Cancel rename friend operation if user presses cancel in middle of name change
+  const handleCancelRenameContact = () => {
+    const op = renameOpRef.current;
+    if (op && !op.isProcessed && !op.isCancelled) {
+      // In the middle of name change: cancel the operation at that time!
+      op.isCancelled = true;
+      op.abortController.abort();
+      // Atomically restore previous aliases snapshot
+      setContactAliases(op.previousAliases);
+      mobileCache.setCachedAliases(currentUser?.id || "", op.previousAliases).catch(() => {});
+      setBannerError("Rename friend operation cancelled.");
+    }
+    // If already processed, cancel should not do anything to maintain consistency and atomicity!
+    setIsSavingAlias(false);
+    setRenameContactUser(null);
+    setNewCustomName("");
+    setAliasError(null);
   };
 
   // Send Personal Photo Message (Background Upload with Immediate Optimistic Display)
@@ -1464,7 +1890,16 @@ export default function ChatsTabScreen() {
               <Text style={[styles.backBtnText, { color: colors.textPrimary }]}>Chats</Text>
             </TouchableOpacity>
 
-            <View style={styles.dmHeaderCenter}>
+            <TouchableOpacity
+              style={styles.dmHeaderCenter}
+              onPress={() => {
+                setNewCustomName(contactAliases[activeContact.id] || activeContact.name);
+                setAliasError(null);
+                setRenameContactUser(activeContact);
+              }}
+              activeOpacity={0.7}
+              accessibilityLabel="View user details"
+            >
               <View style={styles.dmAvatarWrapper}>
                 <UserAvatar
                   name={contactAliases[activeContact.id] || activeContact.name}
@@ -1474,26 +1909,14 @@ export default function ChatsTabScreen() {
                   fontSize={16}
                   backgroundColor={activePalette?.bg || Colors.primary}
                 />
-                <View style={styles.dmPresenceWrapper}>
-                  <PulsingOnlineDot size={9} isOnline={isContactOnline} />
-                </View>
+                {isContactFriend && (
+                  <View style={styles.dmPresenceWrapper}>
+                    <PulsingOnlineDot size={9} isOnline={isContactOnline} />
+                  </View>
+                )}
               </View>
 
-              <TouchableOpacity
-                style={styles.dmHeaderTextWrapper}
-                onPress={() => {
-                  if (isContactFriend) setFavoriteModalUser(activeContact);
-                }}
-                onLongPress={() => {
-                  if (isContactFriend) {
-                    setNewCustomName(contactAliases[activeContact.id] || activeContact.name);
-                    setAliasError(null);
-                    setRenameContactUser(activeContact);
-                  }
-                }}
-                delayLongPress={250}
-                activeOpacity={isContactFriend ? 0.7 : 1}
-              >
+              <View style={styles.dmHeaderTextWrapper}>
                 <View style={styles.dmContactNameRow}>
                   <Text style={[styles.dmContactName, { color: colors.textPrimary }]} numberOfLines={1} ellipsizeMode="tail">
                     {contactAliases[activeContact.id] || activeContact.name}
@@ -1520,13 +1943,28 @@ export default function ChatsTabScreen() {
                     </View>
                   )}
                 </View>
-                <Text style={[styles.dmContactStatus, { color: isContactOnline ? colors.success : colors.textMuted }]} numberOfLines={1} ellipsizeMode="tail">
-                  {isContactOnline ? "Online now" : "Offline"} • @{activeContact.username}
-                  {activeFriendshipStatus === "pending_sent" ? " • Request Sent" : ""}
-                  {activeFriendshipStatus === "pending_received" ? " • Wants to be friends" : ""}
+                <Text
+                  style={[
+                    styles.dmContactStatus,
+                    {
+                      color: isContactFriend && isContactOnline ? colors.success : colors.textMuted,
+                    },
+                  ]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {isContactFriend
+                    ? `${isContactOnline ? "Online now" : "Offline"} • @${activeContact.username}`
+                    : `@${activeContact.username}${
+                        activeFriendshipStatus === "pending_sent"
+                          ? " • Request Sent"
+                          : activeFriendshipStatus === "pending_received"
+                          ? " • Wants to be friends"
+                          : " • Not Friends"
+                      }`}
                 </Text>
-              </TouchableOpacity>
-            </View>
+              </View>
+            </TouchableOpacity>
 
             {/* Header Right Actions: Theme Toggle and Options Menu */}
             <View style={styles.dmHeaderRightActions}>
@@ -1585,8 +2023,8 @@ export default function ChatsTabScreen() {
           {/* 1-on-1 Messages List */}
           <KeyboardAvoidingView
             style={[styles.keyboardContainer, { backgroundColor: colors.background }]}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 25}
           >
             {loadingHistory ? (
               <View style={styles.loadingContainer}>
@@ -1635,6 +2073,9 @@ export default function ChatsTabScreen() {
                   }
                 }}
                 keyboardShouldPersistTaps="handled"
+                initialNumToRender={personalMessages.length > 0 ? Math.min(personalMessages.length, 50) : 25}
+                maxToRenderPerBatch={40}
+                windowSize={21}
                 onContentSizeChange={() => {
                   if (personalMessages.length > 0) {
                     flatListRef.current?.scrollToEnd({ animated: false });
@@ -1725,6 +2166,7 @@ export default function ChatsTabScreen() {
                 )}
                 <ChatInput
                   onSend={handleSendPersonalMessage}
+                  onSendAudio={handleSendPersonalVoiceNote}
                   onPressCamera={() => setShowPhotoPicker(true)}
                   disabled={connectionStatus !== "connected"}
                   placeholder={
@@ -1809,8 +2251,8 @@ export default function ChatsTabScreen() {
               style={[
                 styles.filterChip,
                 {
-                  backgroundColor: activeFilter === "all" ? colors.primary : (isDark ? colors.card : colors.backgroundSecondary),
-                  borderColor: activeFilter === "all" ? colors.primary : colors.border,
+                  backgroundColor: activeFilter === "all" ? colors.primary : (isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9"),
+                  borderColor: activeFilter === "all" ? colors.primary : (isDark ? "rgba(255,255,255,0.12)" : "#CBD5E1"),
                 },
               ]}
               onPress={() => setActiveFilter("all")}
@@ -1820,8 +2262,8 @@ export default function ChatsTabScreen() {
                 style={[
                   styles.filterChipText,
                   {
-                    color: activeFilter === "all" ? "#FFFFFF" : colors.textSecondary,
-                    fontFamily: activeFilter === "all" ? Fonts.bold : Fonts.medium,
+                    color: activeFilter === "all" ? "#FFFFFF" : (isDark ? "#F1F5F9" : "#0F172A"),
+                    fontFamily: activeFilter === "all" ? Fonts.bold : Fonts.semiBold,
                   },
                 ]}
               >
@@ -1834,8 +2276,8 @@ export default function ChatsTabScreen() {
               style={[
                 styles.filterChip,
                 {
-                  backgroundColor: activeFilter === "friends" ? colors.primary : (isDark ? colors.card : colors.backgroundSecondary),
-                  borderColor: activeFilter === "friends" ? colors.primary : colors.border,
+                  backgroundColor: activeFilter === "friends" ? colors.primary : (isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9"),
+                  borderColor: activeFilter === "friends" ? colors.primary : (isDark ? "rgba(255,255,255,0.12)" : "#CBD5E1"),
                 },
               ]}
               onPress={() => setActiveFilter("friends")}
@@ -1843,15 +2285,15 @@ export default function ChatsTabScreen() {
             >
               <Ionicons
                 name="people"
-                size={12}
-                color={activeFilter === "friends" ? "#FFFFFF" : colors.textMuted}
+                size={14}
+                color={activeFilter === "friends" ? "#FFFFFF" : (isDark ? "#94A3B8" : "#475569")}
               />
               <Text
                 style={[
                   styles.filterChipText,
                   {
-                    color: activeFilter === "friends" ? "#FFFFFF" : colors.textSecondary,
-                    fontFamily: activeFilter === "friends" ? Fonts.bold : Fonts.medium,
+                    color: activeFilter === "friends" ? "#FFFFFF" : (isDark ? "#F1F5F9" : "#0F172A"),
+                    fontFamily: activeFilter === "friends" ? Fonts.bold : Fonts.semiBold,
                   },
                 ]}
               >
@@ -1864,8 +2306,8 @@ export default function ChatsTabScreen() {
               style={[
                 styles.filterChip,
                 {
-                  backgroundColor: activeFilter === "online" ? colors.primary : (isDark ? colors.card : colors.backgroundSecondary),
-                  borderColor: activeFilter === "online" ? colors.primary : colors.border,
+                  backgroundColor: activeFilter === "online" ? colors.primary : (isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9"),
+                  borderColor: activeFilter === "online" ? colors.primary : (isDark ? "rgba(255,255,255,0.12)" : "#CBD5E1"),
                 },
               ]}
               onPress={() => setActiveFilter("online")}
@@ -1876,12 +2318,12 @@ export default function ChatsTabScreen() {
                 style={[
                   styles.filterChipText,
                   {
-                    color: activeFilter === "online" ? "#FFFFFF" : colors.textSecondary,
-                    fontFamily: activeFilter === "online" ? Fonts.bold : Fonts.medium,
+                    color: activeFilter === "online" ? "#FFFFFF" : (isDark ? "#F1F5F9" : "#0F172A"),
+                    fontFamily: activeFilter === "online" ? Fonts.bold : Fonts.semiBold,
                   },
                 ]}
               >
-                Online Now ({onlineFriendUsers.length})
+                Online ({onlineFriendUsers.length})
               </Text>
             </TouchableOpacity>
 
@@ -1890,8 +2332,8 @@ export default function ChatsTabScreen() {
               style={[
                 styles.filterChip,
                 {
-                  backgroundColor: activeFilter === "favorites" ? colors.primary : (isDark ? colors.card : colors.backgroundSecondary),
-                  borderColor: activeFilter === "favorites" ? colors.primary : colors.border,
+                  backgroundColor: activeFilter === "favorites" ? colors.primary : (isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9"),
+                  borderColor: activeFilter === "favorites" ? colors.primary : (isDark ? "rgba(255,255,255,0.12)" : "#CBD5E1"),
                 },
               ]}
               onPress={() => setActiveFilter("favorites")}
@@ -1899,15 +2341,15 @@ export default function ChatsTabScreen() {
             >
               <Ionicons
                 name="star"
-                size={12}
+                size={14}
                 color={activeFilter === "favorites" ? "#FFFFFF" : "#F59E0B"}
               />
               <Text
                 style={[
                   styles.filterChipText,
                   {
-                    color: activeFilter === "favorites" ? "#FFFFFF" : colors.textSecondary,
-                    fontFamily: activeFilter === "favorites" ? Fonts.bold : Fonts.medium,
+                    color: activeFilter === "favorites" ? "#FFFFFF" : (isDark ? "#F1F5F9" : "#0F172A"),
+                    fontFamily: activeFilter === "favorites" ? Fonts.bold : Fonts.semiBold,
                   },
                 ]}
               >
@@ -1919,23 +2361,29 @@ export default function ChatsTabScreen() {
             <TouchableOpacity
               style={[
                 styles.filterChip,
-                activeFilter === "ignored" && styles.filterChipActiveIgnored,
+                {
+                  backgroundColor: activeFilter === "ignored" ? "#EF4444" : (isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9"),
+                  borderColor: activeFilter === "ignored" ? "#EF4444" : (isDark ? "rgba(255,255,255,0.12)" : "#CBD5E1"),
+                },
               ]}
               onPress={() => setActiveFilter("ignored")}
               activeOpacity={0.8}
             >
               <Ionicons
                 name="ban"
-                size={12}
-                color={activeFilter === "ignored" ? "#EF4444" : Colors.textMuted}
+                size={14}
+                color={activeFilter === "ignored" ? "#FFFFFF" : "#EF4444"}
               />
               <Text
                 style={[
                   styles.filterChipText,
-                  activeFilter === "ignored" && styles.filterChipTextActiveIgnored,
+                  {
+                    color: activeFilter === "ignored" ? "#FFFFFF" : "#EF4444",
+                    fontFamily: activeFilter === "ignored" ? Fonts.bold : Fonts.semiBold,
+                  },
                 ]}
               >
-                Ignored ({ignoredUsers.length})
+                Blocked ({ignoredUsers.length})
               </Text>
             </TouchableOpacity>
           </ScrollView>
@@ -1944,7 +2392,7 @@ export default function ChatsTabScreen() {
           <FlatList
             data={sortedContacts}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.contactsList}
+            contentContainerStyle={[styles.contactsList, { paddingBottom: 100 }]}
             showsVerticalScrollIndicator={false}
             renderItem={({ item }) => {
               const isOnline = onlineUserIds.includes(item.id);
@@ -1999,15 +2447,17 @@ export default function ChatsTabScreen() {
                       backgroundColor={isBlocked ? "#64748B" : palette.bg}
                     />
                     {isFavorite && <View style={styles.favoriteAvatarRing} />}
-                    <View style={styles.avatarPresenceWrapper}>
-                      {isBlocked ? (
-                        <View style={styles.blockedAvatarBadge}>
-                          <Ionicons name="ban" size={9} color="#FFFFFF" />
-                        </View>
-                      ) : (
-                        <PulsingOnlineDot size={12} isOnline={isOnline} />
-                      )}
-                    </View>
+                    {(isBlocked || isFriend) && (
+                      <View style={styles.avatarPresenceWrapper}>
+                        {isBlocked ? (
+                          <View style={styles.blockedAvatarBadge}>
+                            <Ionicons name="ban" size={9} color="#FFFFFF" />
+                          </View>
+                        ) : (
+                          <PulsingOnlineDot size={12} isOnline={isOnline} />
+                        )}
+                      </View>
+                    )}
                   </View>
 
                   {/* Info */}
@@ -2409,17 +2859,17 @@ export default function ChatsTabScreen() {
                 >
                   <View
                     style={[
-                      styles.optionsActionIconWrap,
-                      { backgroundColor: "rgba(37, 99, 235, 0.12)" },
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(37, 99, 235, 0.12)" },
                     ]}
                   >
-                    <Ionicons name="pencil" size={20} color={Colors.primary} />
+                    <Ionicons name="pencil" size={20} color={colors.primary} />
                   </View>
                   <View style={styles.optionsActionTextWrap}>
-                    <Text style={styles.optionsActionTitle}>
+                    <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
                       {contactAliases[activeContact.id] ? "Edit Friend Nickname" : "Rename Friend"}
                     </Text>
-                    <Text style={styles.optionsActionSub}>
+                    <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                       {contactAliases[activeContact.id]
                         ? `Customized as "${contactAliases[activeContact.id]}" for you`
                         : "Set a private nickname visible only to you"}
@@ -2440,8 +2890,8 @@ export default function ChatsTabScreen() {
                 >
                   <View
                     style={[
-                      styles.optionsActionIconWrap,
-                      { backgroundColor: "rgba(245, 158, 11, 0.12)" },
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(245, 158, 11, 0.12)" },
                     ]}
                   >
                     <Ionicons
@@ -2451,12 +2901,12 @@ export default function ChatsTabScreen() {
                     />
                   </View>
                   <View style={styles.optionsActionTextWrap}>
-                    <Text style={styles.optionsActionTitle}>
+                    <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
                       {isContactFavorite
                         ? "Remove from Favorites"
                         : "Set as Favorite Person ⭐"}
                     </Text>
-                    <Text style={styles.optionsActionSub}>
+                    <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                       {isContactFavorite
                         ? "Currently notified when online"
                         : "Get notified when they come online"}
@@ -2477,8 +2927,8 @@ export default function ChatsTabScreen() {
                 >
                   <View
                     style={[
-                      styles.optionsActionIconWrap,
-                      { backgroundColor: "rgba(239, 68, 68, 0.12)" },
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(239, 68, 68, 0.12)" },
                     ]}
                   >
                     <Ionicons name="person-remove-outline" size={20} color="#EF4444" />
@@ -2487,7 +2937,7 @@ export default function ChatsTabScreen() {
                     <Text style={[styles.optionsActionTitle, { color: "#EF4444" }]}>
                       Unfriend @{activeContact.username}
                     </Text>
-                    <Text style={styles.optionsActionSub}>
+                    <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                       Remove from friends list and restrict messaging
                     </Text>
                   </View>
@@ -2505,25 +2955,25 @@ export default function ChatsTabScreen() {
               >
                 <View
                   style={[
-                    styles.optionsActionIconWrap,
-                    {
-                      backgroundColor: liveTranslateHindi
-                        ? "rgba(16, 185, 129, 0.15)"
-                        : "rgba(59, 130, 246, 0.12)",
-                    },
+                  styles.optionsActionIconWrap,
+                  {
+                    backgroundColor: liveTranslateHindi
+                      ? "rgba(16, 185, 129, 0.15)"
+                      : "rgba(59, 130, 246, 0.12)",
+                  },
                   ]}
                 >
                   <Ionicons
                     name="language"
                     size={20}
-                    color={liveTranslateHindi ? "#10B981" : Colors.primary}
+                    color={liveTranslateHindi ? "#10B981" : colors.primary}
                   />
                 </View>
                 <View style={styles.optionsActionTextWrap}>
-                  <Text style={styles.optionsActionTitle}>
+                  <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
                     Live Hindi Translation: {liveTranslateHindi ? "ON" : "OFF"}
                   </Text>
-                  <Text style={styles.optionsActionSub}>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                     {liveTranslateHindi
                       ? "Automatically translating chat messages into Hindi"
                       : "Tap to turn on live auto-translation of English messages"}
@@ -2542,8 +2992,8 @@ export default function ChatsTabScreen() {
               >
                 <View
                   style={[
-                    styles.optionsActionIconWrap,
-                    { backgroundColor: "rgba(239, 68, 68, 0.12)" },
+                  styles.optionsActionIconWrap,
+                  { backgroundColor: "rgba(239, 68, 68, 0.12)" },
                   ]}
                 >
                   <Ionicons name="trash-outline" size={20} color="#EF4444" />
@@ -2552,7 +3002,7 @@ export default function ChatsTabScreen() {
                   <Text style={[styles.optionsActionTitle, { color: "#EF4444" }]}>
                     Clear Chat
                   </Text>
-                  <Text style={styles.optionsActionSub}>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                     Delete all messages for you in this conversation
                   </Text>
                 </View>
@@ -2569,25 +3019,25 @@ export default function ChatsTabScreen() {
               >
                 <View
                   style={[
-                    styles.optionsActionIconWrap,
-                    {
-                      backgroundColor: isContactBlocked
-                        ? "rgba(16, 185, 129, 0.12)"
-                        : "rgba(100, 116, 139, 0.12)",
-                    },
+                  styles.optionsActionIconWrap,
+                  {
+                    backgroundColor: isContactBlocked
+                      ? "rgba(16, 185, 129, 0.12)"
+                      : "rgba(100, 116, 139, 0.12)",
+                  },
                   ]}
                 >
                   <Ionicons
                     name={isContactBlocked ? "shield-checkmark-outline" : "ban-outline"}
                     size={20}
-                    color={isContactBlocked ? "#10B981" : Colors.textSecondary}
+                    color={isContactBlocked ? "#10B981" : colors.textSecondary}
                   />
                 </View>
                 <View style={styles.optionsActionTextWrap}>
-                  <Text style={styles.optionsActionTitle}>
+                  <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
                     {isContactBlocked ? "Unblock Contact" : "Block Contact"}
                   </Text>
-                  <Text style={styles.optionsActionSub}>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
                     {isContactBlocked
                       ? "Move conversation back to inbox"
                       : "Move incoming texts to Ignored"}
@@ -2668,7 +3118,7 @@ export default function ChatsTabScreen() {
           visible={showUnfriendConfirmModal}
           transparent
           animationType="fade"
-          onRequestClose={() => setShowUnfriendConfirmModal(false)}
+          onRequestClose={handleCancelUnfriendOperation}
         >
           <View style={styles.blockModalOverlay}>
             <View style={[styles.blockModalCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}>
@@ -2687,6 +3137,15 @@ export default function ChatsTabScreen() {
                 Are you sure you want to unfriend {activeContact.name}? You will no longer be friends and messaging will be restricted until you add each other back.
               </Text>
 
+              {isUnfriending && (
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginVertical: 6 }}>
+                  <ActivityIndicator size="small" color="#EF4444" />
+                  <Text style={{ fontSize: 12, color: colors.textMuted }}>
+                    Processing unfriend... Press Cancel anytime to abort.
+                  </Text>
+                </View>
+              )}
+
               <View style={styles.blockModalActions}>
                 <TouchableOpacity
                   style={[styles.blockConfirmBtn, styles.blockDestructiveBtn]}
@@ -2703,8 +3162,7 @@ export default function ChatsTabScreen() {
 
                 <TouchableOpacity
                   style={[styles.blockCancelBtn, { backgroundColor: isDark ? colors.surfaceElevated : colors.backgroundSecondary, borderColor: colors.border, borderWidth: 1 }]}
-                  onPress={() => setShowUnfriendConfirmModal(false)}
-                  disabled={isUnfriending}
+                  onPress={handleCancelUnfriendOperation}
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.blockCancelBtnText, { color: colors.textPrimary }]}>Cancel</Text>
@@ -2721,9 +3179,7 @@ export default function ChatsTabScreen() {
           visible={!!renameContactUser}
           transparent
           animationType="fade"
-          onRequestClose={() => {
-            if (!isSavingAlias) setRenameContactUser(null);
-          }}
+          onRequestClose={handleCancelRenameContact}
         >
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -2732,44 +3188,58 @@ export default function ChatsTabScreen() {
             <View style={[styles.renameModalCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}>
               <View style={styles.renameModalHeader}>
                 <View style={styles.renameModalIconBadge}>
-                  <Ionicons name="pencil" size={20} color={colors.primary} />
+                  <UserAvatar
+                    name={renameContactUser.name}
+                    username={renameContactUser.username}
+                    avatarUrl={renameContactUser.avatarUrl}
+                    size={38}
+                    fontSize={16}
+                    backgroundColor={colors.primary}
+                  />
                 </View>
                 <View style={styles.renameModalTitleWrap}>
-                  <Text style={[styles.renameModalTitle, { color: colors.textPrimary }]}>Rename Friend</Text>
+                  <Text style={[styles.renameModalTitle, { color: colors.textPrimary }]}>User Details</Text>
                   <Text style={[styles.renameModalSubtitle, { color: colors.textSecondary }]}>
-                    Personal nickname for your friend, visible only to you
+                    Profile overview & personalized display name
                   </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.renameModalCloseBtn}
-                  onPress={() => setRenameContactUser(null)}
-                  disabled={isSavingAlias}
+                  onPress={handleCancelRenameContact}
                 >
                   <Ionicons name="close" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
 
-              {/* Locked Username Card (Immutable) */}
+              {/* Username Card */}
               <View style={[styles.lockedUsernameBox, { backgroundColor: isDark ? colors.surfaceElevated : "#F1F5F9", borderColor: colors.border }]}>
                 <View style={styles.lockedUsernameHeaderRow}>
                   <View style={styles.lockedUsernameRow}>
-                    <Ionicons name="lock-closed" size={13} color={colors.textSecondary} />
+                    <Ionicons name="lock-closed" size={14} color={colors.textSecondary} />
                     <Text style={[styles.lockedUsernameText, { color: colors.textPrimary }]}>
                       @{renameContactUser.username}
                     </Text>
                   </View>
-                  <View style={styles.lockedBadge}>
-                    <Text style={styles.lockedBadgeText}>Username cannot be changed</Text>
-                  </View>
+                  <Ionicons name="lock-closed" size={14} color={colors.textMuted} />
                 </View>
-                <Text style={[styles.lockedUsernameNote, { color: colors.textSecondary }]}>
-                  Usernames are permanent and unique across ChatApp. This nickname is purely for your view and is not shared with anyone else.
-                </Text>
+              </View>
+
+              {/* Phone Number Card */}
+              <View style={[styles.lockedUsernameBox, { backgroundColor: isDark ? colors.surfaceElevated : "#F1F5F9", borderColor: colors.border, marginTop: 8 }]}>
+                <View style={styles.lockedUsernameHeaderRow}>
+                  <View style={styles.lockedUsernameRow}>
+                    <Ionicons name="call" size={14} color={colors.textSecondary} />
+                    <Text style={[styles.lockedUsernameText, { color: colors.textPrimary }]}>
+                      {renameContactUser.phoneNumber || "Not provided"}
+                    </Text>
+                  </View>
+                  <Ionicons name="lock-closed" size={14} color={colors.textMuted} />
+                </View>
               </View>
 
               {/* Original Name info */}
               <View style={styles.originalNameRow}>
-                <Text style={[styles.originalNameLabel, { color: colors.textSecondary }]}>Original Name:</Text>
+                <Text style={[styles.originalNameLabel, { color: colors.textSecondary }]}>Account Name:</Text>
                 <Text style={[styles.originalNameValue, { color: colors.textPrimary }]}>{renameContactUser.name}</Text>
               </View>
 
@@ -2777,6 +3247,15 @@ export default function ChatsTabScreen() {
                 <View style={styles.friendAlertError}>
                   <Ionicons name="alert-circle" size={15} color="#EF4444" />
                   <Text style={styles.friendAlertErrorText}>{aliasError}</Text>
+                </View>
+              )}
+
+              {isSavingAlias && (
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginVertical: 6 }}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={{ fontSize: 12, color: colors.textMuted }}>
+                    Updating nickname... Press Cancel anytime to abort.
+                  </Text>
                 </View>
               )}
 
@@ -2833,8 +3312,7 @@ export default function ChatsTabScreen() {
 
                 <TouchableOpacity
                   style={[styles.renameCancelBtn, { backgroundColor: isDark ? colors.surfaceElevated : colors.backgroundSecondary, borderColor: colors.border, borderWidth: 1 }]}
-                  onPress={() => setRenameContactUser(null)}
-                  disabled={isSavingAlias}
+                  onPress={handleCancelRenameContact}
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.renameCancelBtnText, { color: colors.textPrimary }]}>Cancel</Text>
@@ -3172,19 +3650,19 @@ const styles = StyleSheet.create({
   },
   filtersScrollView: {
     flexGrow: 0,
-    maxHeight: 56,
+    marginVertical: 4,
   },
   filtersScrollContent: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 4,
     gap: 8,
     alignItems: "center",
   },
   filtersRow: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 6,
     gap: 8,
   },
   filterChip: {
@@ -3192,11 +3670,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: Colors.backgroundSecondary,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: Colors.borderLight,
+    justifyContent: "center",
   },
   filterChipActive: {
     backgroundColor: Colors.primary,
@@ -3205,16 +3684,18 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
-    elevation: 2,
+    elevation: 3,
   },
   filterChipText: {
-    fontSize: 12,
-    fontFamily: Fonts.medium,
+    fontSize: 12.5,
+    fontFamily: Fonts.semiBold,
     color: Colors.textSecondary,
+    includeFontPadding: false,
   },
   filterChipTextActive: {
     color: "#FFFFFF",
     fontFamily: Fonts.bold,
+    includeFontPadding: false,
   },
   onlineDotMini: {
     width: 7,
