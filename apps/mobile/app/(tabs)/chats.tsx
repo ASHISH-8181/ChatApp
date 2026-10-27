@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   BackHandler,
+  Dimensions,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -15,9 +18,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { ChatMessage, ChatUser, FriendRequestInfo, FriendshipStatus } from "@chatapp/shared";
+import type { ChatMessage, ChatUser, FriendRequestInfo, FriendshipStatus, ChatWallpaperData } from "@chatapp/shared";
 import { useUser } from "@/store/user-context";
 import { socketService, createTempMessageId, type ConnectionStatus } from "@/services/socket";
 import {
@@ -35,6 +39,9 @@ import {
   setContactAliasApi,
   deleteContactAliasApi,
   unfriendUserApi,
+  getChatWallpaperApi,
+  setChatWallpaperApi,
+  removeChatWallpaperApi,
 } from "@/services/api";
 import { mobileCache } from "@/services/cache";
 import {
@@ -47,6 +54,7 @@ import { ChatInput } from "@/components/ChatInput";
 import { PhotoPickerModal } from "@/components/PhotoPickerModal";
 import { ViewOncePhotoModal } from "@/components/ViewOncePhotoModal";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
+import { WallpaperEditorModal } from "@/components/WallpaperEditorModal";
 import { FloatingEmojiBurst } from "@/components/FloatingEmojiBurst";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { LockNavButton } from "@/components/LockNavButton";
@@ -105,24 +113,24 @@ function PulsingOnlineDot({ size = 12, isOnline }: { size?: number; isOnline: bo
           Animated.timing(pulseAnim, {
             toValue: 1.8,
             duration: 1600,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
           Animated.timing(pulseAnim, {
             toValue: 1,
             duration: 0,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
         ]),
         Animated.sequence([
           Animated.timing(opacityAnim, {
             toValue: 0,
             duration: 1600,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
           Animated.timing(opacityAnim, {
             toValue: 0.7,
             duration: 0,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
         ]),
       ])
@@ -202,6 +210,35 @@ export default function ChatsTabScreen() {
     activeContactRef.current = activeContact;
   }, [activeContact]);
 
+  // Android keyboard height tracking for WhatsApp-like bottom bar elevation
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    const handleShow = (e: any) => {
+      const h = e?.endCoordinates?.height ?? 0;
+      if (h > 0) {
+        setAndroidKeyboardHeight(h);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 50);
+      }
+    };
+
+    const handleHide = () => {
+      setAndroidKeyboardHeight(0);
+    };
+
+    const showSub = Keyboard.addListener("keyboardDidShow", handleShow);
+    const hideSub = Keyboard.addListener("keyboardDidHide", handleHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const navigation = useNavigation();
 
   // Hide bottom navigation tabs when activeContact chat is open, restore when leaving
@@ -238,7 +275,7 @@ export default function ChatsTabScreen() {
     Animated.timing(toastAnim, {
       toValue: -140,
       duration: 250,
-      useNativeDriver: true,
+      useNativeDriver: false,
     }).start(() => {
       setFavoriteToast(null);
     });
@@ -263,7 +300,7 @@ export default function ChatsTabScreen() {
       toastAnim.setValue(-140);
       Animated.spring(toastAnim, {
         toValue: Platform.OS === "ios" ? 54 : 20,
-        useNativeDriver: true,
+        useNativeDriver: false,
         tension: 80,
         friction: 10,
       }).start();
@@ -296,6 +333,179 @@ export default function ChatsTabScreen() {
 
   // Live Hindi Translation state for active chat
   const [liveTranslateHindi, setLiveTranslateHindi] = useState(false);
+
+  // Chat Wallpapers state (per-chat shared background)
+  const [chatWallpapers, setChatWallpapers] = useState<Record<string, ChatWallpaperData | null>>({});
+  const [showWallpaperPickerSheet, setShowWallpaperPickerSheet] = useState(false);
+  const [showWallpaperEditor, setShowWallpaperEditor] = useState(false);
+  const [pendingWallpaperUri, setPendingWallpaperUri] = useState<string | null>(null);
+  const [pendingWallpaperBase64, setPendingWallpaperBase64] = useState<string | null>(null);
+  const [isSettingWallpaper, setIsSettingWallpaper] = useState(false);
+
+  const currentUserId = currentUser?.id;
+  const activeContactId = activeContact?.id;
+
+  const activeChatKey = useMemo(() => {
+    if (!currentUserId || !activeContactId) return null;
+    return [currentUserId, activeContactId].sort().join(":");
+  }, [currentUserId, activeContactId]);
+
+  const activeChatWallpaper = useMemo(() => {
+    if (!activeChatKey) return null;
+    return chatWallpapers[activeChatKey] || null;
+  }, [activeChatKey, chatWallpapers]);
+
+  // Load wallpaper when opening 1-on-1 chat
+  useEffect(() => {
+    if (!currentUserId || !activeContactId) return;
+    const pairKey = [currentUserId, activeContactId].sort().join(":");
+    let isMounted = true;
+
+    getChatWallpaperApi(currentUserId, activeContactId)
+      .then((wallpaper) => {
+        if (isMounted) {
+          setChatWallpapers((prev) => ({ ...prev, [pairKey]: wallpaper }));
+        }
+      })
+      .catch((err) => {
+        console.warn("[Wallpaper] Failed to fetch wallpaper:", err?.message || err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUserId, activeContactId]);
+
+  // Listen for real-time wallpaper updates via socket
+  useEffect(() => {
+    const unsub = socketService.onChatWallpaperUpdated((data) => {
+      setChatWallpapers((prev) => ({
+        ...prev,
+        [data.chatKey]: data.wallpaper,
+      }));
+    });
+    return unsub;
+  }, []);
+
+  const handlePickWallpaperFromGallery = async () => {
+    setShowWallpaperPickerSheet(false);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission Required", "Photo library access is needed to pick a wallpaper.");
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+        base64: true,
+      });
+      if (!res.canceled && res.assets && res.assets.length > 0) {
+        const asset = res.assets[0];
+        setPendingWallpaperUri(asset.uri);
+        setPendingWallpaperBase64(asset.base64 || null);
+        setShowWallpaperEditor(true);
+      }
+    } catch (err: any) {
+      console.error("[Wallpaper] Gallery error:", err);
+      setBannerError("Could not access photo library.");
+    }
+  };
+
+  const handlePickWallpaperFromCamera = async () => {
+    setShowWallpaperPickerSheet(false);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission Required", "Camera access is needed to take a wallpaper photo.");
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+        base64: true,
+      });
+      if (!res.canceled && res.assets && res.assets.length > 0) {
+        const asset = res.assets[0];
+        setPendingWallpaperUri(asset.uri);
+        setPendingWallpaperBase64(asset.base64 || null);
+        setShowWallpaperEditor(true);
+      }
+    } catch (err: any) {
+      console.error("[Wallpaper] Camera error:", err);
+      setBannerError("Could not access camera.");
+    }
+  };
+
+  const handleSaveWallpaper = async (params: {
+    imageUri: string;
+    scale: number;
+    translateX: number;
+    translateY: number;
+  }) => {
+    if (!currentUser?.id || !activeContact?.id) return;
+    try {
+      setIsSettingWallpaper(true);
+      let uploadTarget = pendingWallpaperBase64;
+      if (!uploadTarget) {
+        uploadTarget = params.imageUri;
+      }
+      const uploadRes = await uploadImageApi(uploadTarget, "chatapp/wallpapers");
+
+      const wallpaperPayload = {
+        userId: currentUser.id,
+        contactId: activeContact.id,
+        wallpaperUrl: uploadRes.url,
+        scale: params.scale,
+        translateX: params.translateX,
+        translateY: params.translateY,
+      };
+
+      const savedWallpaper = await socketService.setChatWallpaper(wallpaperPayload).catch(async () => {
+        return await setChatWallpaperApi(wallpaperPayload);
+      });
+
+      if (activeChatKey) {
+        setChatWallpapers((prev) => ({
+          ...prev,
+          [activeChatKey]: savedWallpaper,
+        }));
+      }
+
+      setShowWallpaperEditor(false);
+      setPendingWallpaperUri(null);
+      setPendingWallpaperBase64(null);
+    } catch (err: any) {
+      console.error("[Wallpaper] Save error:", err);
+      Alert.alert("Error", err.message || "Failed to set wallpaper. Please try again.");
+    } finally {
+      setIsSettingWallpaper(false);
+    }
+  };
+
+  const handleRemoveWallpaper = async () => {
+    setShowWallpaperPickerSheet(false);
+    if (!currentUser?.id || !activeContact?.id) return;
+    try {
+      await socketService
+        .removeChatWallpaper({ userId: currentUser.id, contactId: activeContact.id })
+        .catch(async () => {
+          await removeChatWallpaperApi(currentUser.id, activeContact.id);
+        });
+
+      if (activeChatKey) {
+        setChatWallpapers((prev) => ({
+          ...prev,
+          [activeChatKey]: null,
+        }));
+      }
+    } catch (err: any) {
+      console.error("[Wallpaper] Remove error:", err);
+      Alert.alert("Error", err.message || "Failed to remove wallpaper.");
+    }
+  };
 
   // Floating Emoji burst state (plays once when first seen)
   const [floatingEmoji, setFloatingEmoji] = useState<string | null>(null);
@@ -418,12 +628,12 @@ export default function ChatsTabScreen() {
       mobileCache.getCachedAliases(currentUser.id),
     ]).then(([cachedMessages, cachedUsers, cachedBlocked, cachedFavs, cachedFriends, cachedAliases]) => {
       if (!isMounted) return;
-      if (cachedMessages && cachedMessages.length > 0) {
+      if (cachedMessages) {
         cachedMessages.forEach((m) => seenAnimatedMessageIdsRef.current.add(m.id));
         setMessages(cachedMessages);
         setLoadingHistory(false);
       }
-      if (cachedUsers && cachedUsers.length > 0) {
+      if (cachedUsers) {
         setRegisteredUsers(cachedUsers);
       }
       if (cachedBlocked) {
@@ -1878,8 +2088,17 @@ export default function ChatsTabScreen() {
       {/* View 1: Personal 1-on-1 Conversation Room */}
       {activeContact ? (
         <View style={[styles.flexContainer, { backgroundColor: colors.background }]}>
-          {/* Direct Chat Header */}
-          <View style={[styles.dmHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+
+          {/* Direct Chat Header — always on top, solid background, never overlapped */}
+          <View style={[
+            styles.dmHeader,
+            {
+              backgroundColor: colors.card,
+              borderBottomColor: colors.border,
+              zIndex: 10,
+              elevation: 10,
+            },
+          ]}>
             <TouchableOpacity
               style={[styles.backBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : colors.backgroundSecondary }]}
               onPress={() => setActiveContact(null)}
@@ -1992,40 +2211,73 @@ export default function ChatsTabScreen() {
             </View>
           </View>
 
-          {/* Blocked Contact Notice Banner */}
-          {isContactBlocked && (
-            <View style={styles.blockedBanner}>
-              <View style={styles.blockedBannerContent}>
-                <Ionicons name="ban" size={15} color="#EF4444" />
-                <Text style={styles.blockedBannerText}>
-                  You blocked this user. Incoming texts are sent to the Ignored tab.
-                </Text>
+          {/* ── Content area below navbar — overflow:hidden clips wallpaper absoluteFill ── */}
+          <View style={{ flex: 1, overflow: "hidden" }}>
+
+            {/* Wallpaper sits here so absoluteFill is clipped to this container only */}
+            {activeChatWallpaper?.wallpaperUrl ? (
+              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <Image
+                  source={{ uri: activeChatWallpaper.wallpaperUrl }}
+                  style={[
+                    StyleSheet.absoluteFill,
+                    {
+                      transform: [
+                        { scale: activeChatWallpaper.scale || 1.0 },
+                        { translateX: (activeChatWallpaper.translateX || 0) * Dimensions.get("window").width },
+                        { translateY: (activeChatWallpaper.translateY || 0) * Dimensions.get("window").height },
+                      ],
+                    },
+                  ]}
+                  resizeMode="cover"
+                />
+                <View
+                  style={[
+                    StyleSheet.absoluteFill,
+                    { backgroundColor: isDark ? "rgba(10,15,29,0.38)" : "rgba(255,255,255,0.12)" },
+                  ]}
+                />
               </View>
-              <TouchableOpacity
-                style={styles.unblockBannerBtn}
-                onPress={() => handleUnblockUser(activeContact.id)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.unblockBannerBtnText}>Unblock</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            ) : null}
 
-          {/* Banner Error */}
-          {bannerError ? (
-            <ErrorBanner
-              message={bannerError}
-              onRetry={() => socketService.connect(currentUser)}
-              onDismiss={() => setBannerError(null)}
-            />
-          ) : null}
+            {/* Blocked Contact Notice Banner */}
+            {isContactBlocked && (
+              <View style={styles.blockedBanner}>
+                <View style={styles.blockedBannerContent}>
+                  <Ionicons name="ban" size={15} color="#EF4444" />
+                  <Text style={styles.blockedBannerText}>
+                    You blocked this user. Incoming texts are sent to the Ignored tab.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.unblockBannerBtn}
+                  onPress={() => handleUnblockUser(activeContact.id)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.unblockBannerBtnText}>Unblock</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-          {/* 1-on-1 Messages List */}
-          <KeyboardAvoidingView
-            style={[styles.keyboardContainer, { backgroundColor: colors.background }]}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 25}
-          >
+            {/* Banner Error */}
+            {bannerError ? (
+              <ErrorBanner
+                message={bannerError}
+                onRetry={() => socketService.connect(currentUser)}
+                onDismiss={() => setBannerError(null)}
+              />
+            ) : null}
+
+            {/* 1-on-1 Messages List */}
+            <KeyboardAvoidingView
+              style={[
+                styles.keyboardContainer,
+                { backgroundColor: "transparent" },
+                Platform.OS === "android" && { paddingBottom: androidKeyboardHeight },
+              ]}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+              keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+            >
             {loadingHistory ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={Colors.primary} />
@@ -2073,6 +2325,8 @@ export default function ChatsTabScreen() {
                   }
                 }}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
                 initialNumToRender={personalMessages.length > 0 ? Math.min(personalMessages.length, 50) : 25}
                 maxToRenderPerBatch={40}
                 windowSize={21}
@@ -2179,7 +2433,8 @@ export default function ChatsTabScreen() {
                 />
               </>
             )}
-          </KeyboardAvoidingView>
+            </KeyboardAvoidingView>
+          </View>{/* end overflow:hidden content wrapper */}
         </View>
       ) : (
         /* View 2: Personal Chats List (Direct Messages Directory) */
@@ -2981,6 +3236,35 @@ export default function ChatsTabScreen() {
                 </View>
               </TouchableOpacity>
 
+              {/* Action: Set / Change Wallpaper */}
+              <TouchableOpacity
+                style={styles.optionsActionRow}
+                onPress={() => {
+                  setShowOptionsMenu(false);
+                  setTimeout(() => setShowWallpaperPickerSheet(true), 150);
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(168, 85, 247, 0.15)" },
+                  ]}
+                >
+                  <Ionicons name="image-outline" size={20} color="#A855F7" />
+                </View>
+                <View style={styles.optionsActionTextWrap}>
+                  <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
+                    {activeChatWallpaper?.wallpaperUrl ? "Change Chat Wallpaper" : "Set Chat Wallpaper"}
+                  </Text>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
+                    {activeChatWallpaper?.wallpaperUrl
+                      ? "Custom background active for both of you"
+                      : "Pinch to zoom and set custom wallpaper"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
               {/* Action 2: Clear Chat History */}
               <TouchableOpacity
                 style={styles.optionsActionRow}
@@ -3057,6 +3341,159 @@ export default function ChatsTabScreen() {
             </View>
           </TouchableOpacity>
         </Modal>
+      )}
+
+      {/* Wallpaper Picker Sheet Modal */}
+      {activeContact && (
+        <Modal
+          visible={showWallpaperPickerSheet}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowWallpaperPickerSheet(false)}
+        >
+          <TouchableOpacity
+            style={styles.optionsModalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowWallpaperPickerSheet(false)}
+          >
+            <View
+              style={[
+                styles.optionsModalCard,
+                { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 },
+              ]}
+            >
+              <View style={styles.optionsModalHeader}>
+                <View
+                  style={[
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(168, 85, 247, 0.15)", width: 44, height: 44, borderRadius: 22 },
+                  ]}
+                >
+                  <Ionicons name="image-outline" size={24} color="#A855F7" />
+                </View>
+                <View style={styles.optionsModalHeaderInfo}>
+                  <Text style={[styles.optionsModalName, { color: colors.textPrimary }]} numberOfLines={1}>
+                    Chat Wallpaper
+                  </Text>
+                  <Text style={[styles.optionsModalUsername, { color: colors.textSecondary }]} numberOfLines={1}>
+                    Shared with @{activeContact.username}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.optionsDivider, { backgroundColor: colors.border }]} />
+
+              {/* Choose from Gallery */}
+              <TouchableOpacity
+                style={styles.optionsActionRow}
+                onPress={handlePickWallpaperFromGallery}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(59, 130, 246, 0.12)" },
+                  ]}
+                >
+                  <Ionicons name="images-outline" size={20} color="#3B82F6" />
+                </View>
+                <View style={styles.optionsActionTextWrap}>
+                  <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
+                    Choose from Gallery
+                  </Text>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
+                    Select photo and pinch to zoom & frame
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Take Photo */}
+              <TouchableOpacity
+                style={styles.optionsActionRow}
+                onPress={handlePickWallpaperFromCamera}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.optionsActionIconWrap,
+                    { backgroundColor: "rgba(16, 185, 129, 0.12)" },
+                  ]}
+                >
+                  <Ionicons name="camera-outline" size={20} color="#10B981" />
+                </View>
+                <View style={styles.optionsActionTextWrap}>
+                  <Text style={[styles.optionsActionTitle, { color: colors.textPrimary }]}>
+                    Take Photo
+                  </Text>
+                  <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
+                    Capture a fresh photo using camera
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Remove Wallpaper (if set) */}
+              {activeChatWallpaper?.wallpaperUrl && (
+                <TouchableOpacity
+                  style={styles.optionsActionRow}
+                  onPress={handleRemoveWallpaper}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.optionsActionIconWrap,
+                      { backgroundColor: "rgba(239, 68, 68, 0.12)" },
+                    ]}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  </View>
+                  <View style={styles.optionsActionTextWrap}>
+                    <Text style={[styles.optionsActionTitle, { color: "#EF4444" }]}>
+                      Remove Wallpaper
+                    </Text>
+                    <Text style={[styles.optionsActionSub, { color: colors.textSecondary }]}>
+                      Revert back to default background
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              <View style={[styles.optionsDivider, { backgroundColor: colors.border }]} />
+
+              <TouchableOpacity
+                style={[
+                  styles.optionsCancelBtn,
+                  {
+                    backgroundColor: isDark ? colors.surfaceElevated : colors.backgroundSecondary,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                  },
+                ]}
+                onPress={() => setShowWallpaperPickerSheet(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.optionsCancelBtnText, { color: colors.textPrimary }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
+      {/* Interactive Wallpaper Editor Modal (Pinch-to-zoom & WhatsApp-style preview) */}
+      {activeContact && (
+        <WallpaperEditorModal
+          visible={showWallpaperEditor}
+          imageUri={pendingWallpaperUri}
+          contactName={contactAliases[activeContact.id] || activeContact.name}
+          contactUsername={activeContact.username}
+          colors={colors}
+          isSaving={isSettingWallpaper}
+          onClose={() => {
+            setShowWallpaperEditor(false);
+            setPendingWallpaperUri(null);
+            setPendingWallpaperBase64(null);
+          }}
+          onSave={handleSaveWallpaper}
+        />
       )}
 
       {/* Clear Chat Confirmation Modal */}

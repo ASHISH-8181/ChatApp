@@ -1,18 +1,22 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 
 import type { ChatMessage, ChatUser, GroupMemberInfo, ReadReceipt } from "@chatapp/shared";
 import { Image } from "expo-image";
@@ -22,6 +26,57 @@ import { translateToHindi, getCachedHindi, isHindiText } from "@/services/transl
 import { UserAvatar } from "@/components/UserAvatar";
 import { VoiceNoteBubble } from "@/components/VoiceNoteBubble";
 import { useTheme } from "@/store/theme-context";
+
+const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+
+function renderTextWithClickableLinks(
+  content: string,
+  baseTextStyle: any,
+  linkStyle: any
+) {
+  if (!content) return null;
+
+  const parts = content.split(URL_REGEX);
+  if (parts.length <= 1) {
+    return <Text style={baseTextStyle}>{content}</Text>;
+  }
+
+  const handlePressUrl = async (rawUrl: string) => {
+    try {
+      const url = rawUrl.startsWith("http://") || rawUrl.startsWith("https://")
+        ? rawUrl
+        : `https://${rawUrl}`;
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        await Linking.openURL(url);
+      }
+    } catch (err) {
+      console.warn("Could not open URL:", rawUrl, err);
+    }
+  };
+
+  return (
+    <Text style={baseTextStyle}>
+      {parts.map((part, index) => {
+        if (part.match(URL_REGEX)) {
+          return (
+            <Text
+              key={index}
+              style={linkStyle}
+              onPress={() => handlePressUrl(part)}
+              suppressHighlighting={false}
+            >
+              {part}
+            </Text>
+          );
+        }
+        return part;
+      })}
+    </Text>
+  );
+}
 
 interface ChatBubbleProps {
   message: ChatMessage;
@@ -539,7 +594,7 @@ export function ChatBubble({
                     )}
                   </TouchableOpacity>
                   {message.text && message.text !== "Photo" ? (
-                    <Text style={styles.captionMe}>{message.text}</Text>
+                    renderTextWithClickableLinks(message.text, styles.captionMe, styles.linkMe)
                   ) : null}
                 </View>
               ) : shouldTranslate && isTranslationValid ? (
@@ -567,14 +622,14 @@ export function ChatBubble({
               ) : shouldTranslate && isTranslating ? (
                 /* Translating in progress */
                 <View style={styles.translateWrapper}>
-                  <Text style={styles.textMe}>{message.text}</Text>
+                  {renderTextWithClickableLinks(message.text, styles.textMe, styles.linkMe)}
                   <View style={styles.translatingBadgeMe}>
                     <ActivityIndicator size="small" color="#FFFFFF" />
                     <Text style={styles.translatingTextMe}>अनुवाद हो रहा है...</Text>
                   </View>
                 </View>
               ) : (
-                <Text style={styles.textMe}>{message.text}</Text>
+                renderTextWithClickableLinks(message.text, styles.textMe, styles.linkMe)
               )}
 
               <View style={styles.footerMe}>
@@ -762,7 +817,7 @@ export function ChatBubble({
                       />
                     </TouchableOpacity>
                     {message.text && message.text !== "Photo" ? (
-                      <Text style={styles.captionOther}>{message.text}</Text>
+                      renderTextWithClickableLinks(message.text, styles.captionOther, styles.linkOther)
                     ) : null}
                   </View>
                 ) : shouldTranslate && isTranslationValid ? (
@@ -790,14 +845,18 @@ export function ChatBubble({
                 ) : shouldTranslate && isTranslating ? (
                   /* Translating in progress */
                   <View style={styles.translateWrapper}>
-                    <Text style={styles.textOther}>{message.text}</Text>
+                    {renderTextWithClickableLinks(message.text, styles.textOther, styles.linkOther)}
                     <View style={styles.translatingBadgeOther}>
                       <ActivityIndicator size="small" color={Colors.primary} />
                       <Text style={styles.translatingTextOther}>अनुवाद हो रहा है...</Text>
                     </View>
                   </View>
                 ) : (
-                  <Text style={[styles.textOther, { color: colors.textPrimary }]}>{message.text}</Text>
+                  renderTextWithClickableLinks(
+                    message.text,
+                    [styles.textOther, { color: colors.textPrimary }],
+                    styles.linkOther
+                  )
                 )}
 
                 <View style={styles.footerOther}>
@@ -877,6 +936,44 @@ export function ChatBubble({
             </View>
 
             <View style={styles.actionButtonsList}>
+              {/* Option: Copy message text to mobile operating system clipboard */}
+              {Boolean(message.text && message.text !== "Photo" && !isDeleted) && (
+                <TouchableOpacity
+                  style={styles.actionOptionBtn}
+                  onPress={async () => {
+                    setShowOptionsModal(false);
+                    setIsSelected(false);
+                    try {
+                      await Clipboard.setStringAsync(message.text);
+                      if (Platform.OS === "android") {
+                        ToastAndroid.show("Message copied to clipboard", ToastAndroid.SHORT);
+                      } else {
+                        Alert.alert("Copied", "Message copied to clipboard");
+                      }
+                    } catch (err) {
+                      console.warn("Failed to copy message:", err);
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.actionOptionIcon,
+                      { backgroundColor: "rgba(59, 130, 246, 0.12)" },
+                    ]}
+                  >
+                    <Ionicons name="copy-outline" size={18} color={Colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.actionOptionTitle}>Copy message</Text>
+                    <Text style={styles.actionOptionDesc}>
+                      Copy message text to device clipboard
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                </TouchableOpacity>
+              )}
+
               {/* Option: Live Hindi Translation Toggle */}
               {Boolean(message.text && message.text !== "Photo" && !isDeleted && !isEmojiOnlyMessage) && (
                 <TouchableOpacity
@@ -1373,6 +1470,16 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodyRegular,
     lineHeight: 21,
     marginBottom: 2,
+  },
+  linkMe: {
+    color: "#E0E7FF",
+    textDecorationLine: "underline",
+    fontWeight: "600",
+  },
+  linkOther: {
+    color: Colors.primary,
+    textDecorationLine: "underline",
+    fontWeight: "600",
   },
   footerMe: {
     flexDirection: "row",

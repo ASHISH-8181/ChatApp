@@ -45,6 +45,10 @@ import type {
   GameVoiceChunk,
   GameVoiceStatus,
   FriendRequestInfo,
+  ChatWallpaperData,
+  SetChatWallpaperPayload,
+  RemoveChatWallpaperPayload,
+  ChatWallpaperUpdatedEvent,
 } from "@chatapp/shared";
 import { getServerUrl, getSocketUrl } from "./api";
 
@@ -111,6 +115,7 @@ type ViewOnceOpenedListener = (data: {
 type FriendRequestListener = (request: FriendRequestInfo) => void;
 type FriendRespondedListener = (data: { requestId: string; status: "accepted" | "declined"; user: ChatUser }) => void;
 type FriendUnfriendedListener = (data: { userId: string; targetUserId: string }) => void;
+export type ChatWallpaperListener = (data: ChatWallpaperUpdatedEvent) => void;
 
 class SocketService {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
@@ -125,6 +130,7 @@ class SocketService {
   private friendRequestListeners = new Set<FriendRequestListener>();
   private friendRespondedListeners = new Set<FriendRespondedListener>();
   private friendUnfriendedListeners = new Set<FriendUnfriendedListener>();
+  private wallpaperListeners = new Set<ChatWallpaperListener>();
   private statusListeners = new Set<StatusListener>();
   private errorListeners = new Set<ErrorListener>();
   private usersListeners = new Set<UsersListener>();
@@ -360,6 +366,10 @@ class SocketService {
 
     this.socket.on("friend:unfriended", (data) => {
       this.friendUnfriendedListeners.forEach((l) => l(data));
+    });
+
+    this.socket.on("chat:wallpaper_updated", (data) => {
+      this.wallpaperListeners.forEach((l) => l(data));
     });
 
     this.socket.on("error", (errorData) => {
@@ -763,6 +773,79 @@ class SocketService {
           resolve({ customName: res.customName });
         } else {
           const errMsg = res && res.status === "error" ? res.message : "Failed to set custom nickname";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  onChatWallpaperUpdated(listener: ChatWallpaperListener): () => void {
+    this.wallpaperListeners.add(listener);
+    return () => {
+      this.wallpaperListeners.delete(listener);
+    };
+  }
+
+  setChatWallpaper(
+    payload: SetChatWallpaperPayload,
+    options?: { signal?: AbortSignal }
+  ): Promise<ChatWallpaperData> {
+    return new Promise((resolve, reject) => {
+      if (options?.signal?.aborted) {
+        return reject(new Error("Operation aborted"));
+      }
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      const onAbort = () => {
+        reject(new Error("Operation aborted"));
+      };
+      if (options?.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      this.socket.emit("chat:set_wallpaper", payload, (res) => {
+        if (options?.signal) {
+          options.signal.removeEventListener("abort", onAbort);
+        }
+        if (options?.signal?.aborted) return;
+        if (res && res.status === "ok" && res.wallpaper) {
+          resolve(res.wallpaper);
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to set chat wallpaper";
+          reject(new Error(errMsg));
+        }
+      });
+    });
+  }
+
+  removeChatWallpaper(
+    payload: RemoveChatWallpaperPayload,
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (options?.signal?.aborted) {
+        return reject(new Error("Operation aborted"));
+      }
+      if (!this.socket || !this.socket.connected) {
+        return reject(new Error("Socket not connected"));
+      }
+      const onAbort = () => {
+        reject(new Error("Operation aborted"));
+      };
+      if (options?.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      this.socket.emit("chat:remove_wallpaper", payload, (res) => {
+        if (options?.signal) {
+          options.signal.removeEventListener("abort", onAbort);
+        }
+        if (options?.signal?.aborted) return;
+        if (res && res.status === "ok") {
+          resolve();
+        } else {
+          const errMsg = res && res.status === "error" ? res.message : "Failed to remove chat wallpaper";
           reject(new Error(errMsg));
         }
       });

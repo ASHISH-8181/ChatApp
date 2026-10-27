@@ -20,7 +20,7 @@ const server = serve(
   }
 );
 
-// Attach Socket.IO to the HTTP server
+// Attach Socket.IO to the HTTP server with high-concurrency tuning (1,000+ users)
 const io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents>(
   server as any,
   {
@@ -28,6 +28,11 @@ const io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents>(
       origin: "*",
       methods: ["GET", "POST"],
     },
+    pingInterval: 25000,
+    pingTimeout: 20000,
+    perMessageDeflate: false, // Disables compression CPU bottlenecks under heavy concurrency
+    maxHttpBufferSize: 1e7,  // 10MB limit for media
+    transports: ["websocket", "polling"],
   }
 );
 
@@ -51,7 +56,7 @@ setInterval(async () => {
   } finally {
     isPeriodicChecking = false;
   }
-}, 5000);
+}, 12000);
 
 export { app, server, io };
 // Server updated with friends & media features

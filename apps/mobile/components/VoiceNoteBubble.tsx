@@ -75,7 +75,7 @@ export function VoiceNoteBubble({ audioUrl, durationLabel, isMe }: VoiceNoteBubb
       (async () => {
         try {
           const { AudioPlayer } = await import("expo-audio");
-          const player = new AudioPlayer(audioUrl, 500, false, 0);
+          const player = new AudioPlayer(audioUrl, 500, false, 0, false);
           if (!isMounted) {
             player.remove();
             return;

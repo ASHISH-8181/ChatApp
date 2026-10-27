@@ -450,7 +450,38 @@ export interface ServerToClientEvents {
   "friend:request:received": (request: FriendRequestInfo) => void;
   "friend:request:responded": (data: { requestId: string; status: "accepted" | "declined"; user: ChatUser }) => void;
   "friend:unfriended": (data: { userId: string; targetUserId: string }) => void;
+  "chat:wallpaper_updated": (data: ChatWallpaperUpdatedEvent) => void;
   error: (error: { message: string }) => void;
+}
+
+export interface ChatWallpaperData {
+  wallpaperUrl: string;
+  scale?: number;
+  translateX?: number;
+  translateY?: number;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface SetChatWallpaperPayload {
+  userId: string;
+  contactId: string;
+  wallpaperUrl: string;
+  scale?: number;
+  translateX?: number;
+  translateY?: number;
+}
+
+export interface RemoveChatWallpaperPayload {
+  userId: string;
+  contactId: string;
+}
+
+export interface ChatWallpaperUpdatedEvent {
+  chatKey: string;
+  user1Id: string;
+  user2Id: string;
+  wallpaper: ChatWallpaperData | null;
 }
 
 export interface ClientToServerEvents {
@@ -469,6 +500,14 @@ export interface ClientToServerEvents {
   "user:alias:set": (
     payload: { userId: string; targetUserId: string; customName: string },
     callback?: (response: { status: "ok"; customName: string } | { status: "error"; message: string }) => void
+  ) => void;
+  "chat:set_wallpaper": (
+    payload: SetChatWallpaperPayload,
+    callback?: (response: { status: "ok"; wallpaper: ChatWallpaperData } | { status: "error"; message: string }) => void
+  ) => void;
+  "chat:remove_wallpaper": (
+    payload: RemoveChatWallpaperPayload,
+    callback?: (response: { status: "ok" } | { status: "error"; message: string }) => void
   ) => void;
   "chat:send": (
     payload: SendMessagePayload,
@@ -844,5 +883,130 @@ export interface ResetLudoPayload {
   roomId: string;
   userId: string;
 }
+
+export interface WallpaperPreset {
+  id: string;
+  name: string;
+  category: "gradient" | "dark" | "artistic" | "vibrant";
+  colors: [string, string, ...string[]];
+  accentColor: string;
+  description?: string;
+}
+
+export const WALLPAPER_PRESETS: WallpaperPreset[] = [
+  {
+    id: "amoled_pitch",
+    name: "AMOLED Pitch",
+    category: "dark",
+    colors: ["#000000", "#09090b", "#000000"],
+    accentColor: "#3b82f6",
+    description: "Pure black minimalism with subtle vignette for OLED screens",
+  },
+  {
+    id: "whatsapp_classic",
+    name: "Classic WhatsApp Dark",
+    category: "dark",
+    colors: ["#0b141a", "#111b21", "#0c151c"],
+    accentColor: "#00a884",
+    description: "Authentic, eye-friendly messenger dark slate",
+  },
+  {
+    id: "neon_cyberpunk",
+    name: "Neon Cyberpunk",
+    category: "vibrant",
+    colors: ["#14052b", "#2a0845", "#0b0217"],
+    accentColor: "#a855f7",
+    description: "Vibrant synthwave violet with deep space shadows",
+  },
+  {
+    id: "sunset_dusk",
+    name: "Sunset Twilight",
+    category: "artistic",
+    colors: ["#2d112c", "#441838", "#1c0c1b"],
+    accentColor: "#ec4899",
+    description: "Warm romantic dusk tones and deep plum gradient",
+  },
+  {
+    id: "emerald_forest",
+    name: "Emerald Forest",
+    category: "artistic",
+    colors: ["#05231a", "#0d3c2c", "#03140e"],
+    accentColor: "#10b981",
+    description: "Deep soothing pine and rainforest green",
+  },
+  {
+    id: "ocean_abyss",
+    name: "Ocean Abyss",
+    category: "gradient",
+    colors: ["#031926", "#092d42", "#011019"],
+    accentColor: "#0ea5e9",
+    description: "Submerged marine blue with crystal oceanic tones",
+  },
+  {
+    id: "cozy_mocha",
+    name: "Cozy Mocha",
+    category: "artistic",
+    colors: ["#231815", "#392520", "#18100d"],
+    accentColor: "#f59e0b",
+    description: "Warm roasted espresso & hazelnut warmth",
+  },
+  {
+    id: "crimson_eclipse",
+    name: "Crimson Eclipse",
+    category: "vibrant",
+    colors: ["#28090d", "#421016", "#160406"],
+    accentColor: "#ef4444",
+    description: "Passionate deep burgundy with dramatic dark contrast",
+  },
+  {
+    id: "aurora_borealis",
+    name: "Aurora Teal",
+    category: "gradient",
+    colors: ["#07202f", "#113848", "#081d27"],
+    accentColor: "#14b8a6",
+    description: "Hypnotic northern lights teal with cosmic dark navy",
+  },
+  {
+    id: "lavender_dream",
+    name: "Lavender Twilight",
+    category: "gradient",
+    colors: ["#211a38", "#332654", "#151025"],
+    accentColor: "#8b5cf6",
+    description: "Soft velvet violet gradient for late night chats",
+  },
+  {
+    id: "glacier_frost",
+    name: "Glacier Frost",
+    category: "gradient",
+    colors: ["#0c233c", "#143a5e", "#071626"],
+    accentColor: "#38bdf8",
+    description: "Cool arctic chill with premium glass sheen",
+  },
+  {
+    id: "carbon_mesh",
+    name: "Carbon Slate",
+    category: "dark",
+    colors: ["#111827", "#1f2937", "#0f172a"],
+    accentColor: "#64748b",
+    description: "Modern stealth graphite for clean focus",
+  },
+];
+
+export const WALLPAPER_SOLID_COLORS: { name: string; hex: string }[] = [
+  { name: "Default Dark", hex: "#0F172A" },
+  { name: "Pure OLED Black", hex: "#000000" },
+  { name: "WhatsApp Slate", hex: "#0B141A" },
+  { name: "Midnight Navy", hex: "#0A192F" },
+  { name: "Indigo Velvet", hex: "#1E1B4B" },
+  { name: "Royal Purple", hex: "#2E1065" },
+  { name: "Forest Green", hex: "#064E3B" },
+  { name: "Deep Teal", hex: "#134E4A" },
+  { name: "Ocean Sapphire", hex: "#0C4A6E" },
+  { name: "Wine Burgundy", hex: "#4C0519" },
+  { name: "Warm Espresso", hex: "#291811" },
+  { name: "Charcoal Smoke", hex: "#1C1917" },
+  { name: "Zinc Gunmetal", hex: "#18181B" },
+  { name: "Steel Twilight", hex: "#1E293B" },
+];
 
 

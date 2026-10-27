@@ -6,6 +6,7 @@ import type {
   LoginUserPayload,
   CreateGroupPayload,
   InviteGroupMembersPayload,
+  SetChatWallpaperPayload,
 } from "@chatapp/shared";
 
 export const messagesRouter = new Hono();
@@ -87,6 +88,58 @@ messagesRouter.post("/translate", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to translate message";
     return c.json({ error: message }, 500);
+  }
+});
+
+// Get chat wallpaper between two users
+messagesRouter.get("/wallpaper", async (c) => {
+  try {
+    const user1Id = c.req.query("user1Id") || c.req.query("currentUserId");
+    const user2Id = c.req.query("user2Id") || c.req.query("contactId") || c.req.query("recipientId");
+    if (!user1Id || !user2Id) {
+      return c.json({ error: "user1Id and user2Id are required" }, 400);
+    }
+    const wallpaper = await messagesService.getChatWallpaper(user1Id, user2Id);
+    return c.json({ wallpaper }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to get wallpaper";
+    return c.json({ error: message }, 500);
+  }
+});
+
+// Set chat wallpaper between two users
+messagesRouter.post("/wallpaper", async (c) => {
+  try {
+    const body = await c.req.json<SetChatWallpaperPayload>();
+    if (!body?.userId || !body?.contactId || !body?.wallpaperUrl) {
+      return c.json({ error: "userId, contactId, and wallpaperUrl are required" }, 400);
+    }
+    const wallpaper = await messagesService.setChatWallpaper(body);
+    return c.json({ status: "ok", wallpaper }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to set wallpaper";
+    return c.json({ error: message }, 400);
+  }
+});
+
+// Remove chat wallpaper between two users
+messagesRouter.delete("/wallpaper", async (c) => {
+  try {
+    let userId = c.req.query("userId");
+    let contactId = c.req.query("contactId") || c.req.query("recipientId");
+    if (!userId || !contactId) {
+      const body = await c.req.json().catch(() => ({}));
+      userId = userId || body.userId;
+      contactId = contactId || body.contactId || body.recipientId;
+    }
+    if (!userId || !contactId) {
+      return c.json({ error: "userId and contactId are required" }, 400);
+    }
+    await messagesService.removeChatWallpaper(userId, contactId);
+    return c.json({ status: "ok" }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to remove wallpaper";
+    return c.json({ error: message }, 400);
   }
 });
 

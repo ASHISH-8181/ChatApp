@@ -40,8 +40,9 @@ export function ImageViewerModal({
     if (!imageUrl || isDownloading) return;
 
     try {
-      setIsDownloading(true);
-      const success = await downloadPhotoToDevice(imageUrl);
+      const success = await downloadPhotoToDevice(imageUrl, {
+        onStartSaving: () => setIsDownloading(true),
+      });
       if (success) {
         setDownloadSuccess(true);
         setTimeout(() => setDownloadSuccess(false), 3000);

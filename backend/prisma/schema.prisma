@@ -31,6 +31,8 @@ model User {
   favoritedBy         FavoriteUser[]    @relation("FavoritedByUsers")
   sentFriendRequests     FriendRequest[]   @relation("SentFriendRequests")
   receivedFriendRequests FriendRequest[]   @relation("ReceivedFriendRequests")
+  wallpapersAsUser1   ChatWallpaper[]   @relation("User1Wallpapers")
+  wallpapersAsUser2   ChatWallpaper[]   @relation("User2Wallpapers")
 
   @@map("users")
 }
@@ -51,6 +53,9 @@ model Group {
   messages        Message[]
   invitations     GroupInvitation[]
 
+  @@index([createdById])
+  @@index([isChugli, expiresAt])
+  @@index([createdAt])
   @@map("groups")
 }
 
@@ -116,6 +121,9 @@ model Message {
 
   @@index([createdAt])
   @@index([senderId, recipientId])
+  @@index([recipientId, senderId])
+  @@index([recipientId, createdAt])
+  @@index([groupId, createdAt])
   @@index([groupId])
   @@map("messages")
 }
@@ -278,4 +286,26 @@ model MurderMysteryHistory {
   @@index([roomId])
   @@map("murder_mystery_history")
 }
+
+model ChatWallpaper {
+  id           String   @id @default(uuid())
+  user1Id      String
+  user2Id      String
+  wallpaperUrl String
+  scale        Float    @default(1.0)
+  translateX   Float    @default(0.0)
+  translateY   Float    @default(0.0)
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user1        User     @relation("User1Wallpapers", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2        User     @relation("User2Wallpapers", fields: [user2Id], references: [id], onDelete: Cascade)
+
+  @@unique([user1Id, user2Id])
+  @@index([user1Id])
+  @@index([user2Id])
+  @@map("chat_wallpapers")
+}
+
 

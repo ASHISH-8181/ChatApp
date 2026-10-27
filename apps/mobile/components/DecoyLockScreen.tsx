@@ -16,7 +16,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { Ionicons } from "@/components/Icon";
 import { useDecoyLock } from "@/store/decoy-lock-context";
 import { useUser } from "@/store/user-context";
@@ -26,6 +26,7 @@ import { loginUserApi } from "@/services/api";
 let WebView: any = null;
 if (Platform.OS !== "web") {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     WebView = require("react-native-webview").WebView;
   } catch (err) {
     console.warn("[DecoyLock] react-native-webview not loaded", err);
@@ -48,7 +49,7 @@ export function DecoyLockScreen() {
 
   // PDF reading state
   const [pdfBase64, setPdfBase64] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(decoyDoc?.type === "pdf" && Platform.OS !== "web");
 
   // Forgot Password / Account Verification state
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -71,7 +72,10 @@ export function DecoyLockScreen() {
     let isMounted = true;
     if (!isLocked || decoyDoc?.type !== "pdf" || !decoyDoc?.uri) {
       Promise.resolve().then(() => {
-        if (isMounted) setPdfBase64(null);
+        if (isMounted) {
+          setPdfBase64(null);
+          setPdfLoading(false);
+        }
       });
       return () => {
         isMounted = false;
@@ -82,13 +86,43 @@ export function DecoyLockScreen() {
       if (Platform.OS === "web") return;
       try {
         setPdfLoading(true);
-        if (decoyDoc?.uri && (decoyDoc.uri.startsWith("file://") || decoyDoc.uri.startsWith("/"))) {
-          const b64 = await FileSystem.readAsStringAsync(decoyDoc.uri, {
+        const docUri = decoyDoc?.uri;
+        if (!docUri) return;
+
+        let b64: string | null = null;
+
+        // Strategy 1: expo-file-system/legacy readAsStringAsync
+        try {
+          b64 = await FileSystem.readAsStringAsync(docUri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-          if (isMounted) {
-            setPdfBase64(b64);
+        } catch (fsErr) {
+          console.warn("[DecoyLock] FileSystem.readAsStringAsync failed, trying fallback:", fsErr);
+        }
+
+        // Strategy 2: React Native fetch blob + FileReader fallback (handles content:// and cache:// URIs)
+        if (!b64) {
+          try {
+            const resp = await fetch(docUri);
+            const blob = await resp.blob();
+            b64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const res = reader.result as string;
+                if (!res) return resolve("");
+                const idx = res.indexOf("base64,");
+                resolve(idx !== -1 ? res.substring(idx + 7) : res);
+              };
+              reader.onerror = (e) => reject(e);
+              reader.readAsDataURL(blob);
+            });
+          } catch (fetchErr) {
+            console.warn("[DecoyLock] Fetch fallback also failed:", fetchErr);
           }
+        }
+
+        if (isMounted && b64) {
+          setPdfBase64(b64.replace(/\s+/g, ""));
         }
       } catch (err) {
         console.warn("[DecoyLock] Failed to read PDF file:", err);
@@ -250,11 +284,8 @@ export function DecoyLockScreen() {
 
   // HTML content for rendering multi-page PDF with PDF.js inside WebView
   const pdfHtml = useMemo(() => {
-    const sourceParam = pdfBase64
-      ? `{ data: atob("${pdfBase64}") }`
-      : decoyDoc?.uri
-      ? `"${decoyDoc.uri}"`
-      : "null";
+    const safeBase64 = pdfBase64 || "";
+    const safeUri = decoyDoc?.uri || "";
 
     return `
 <!DOCTYPE html>
@@ -314,11 +345,33 @@ export function DecoyLockScreen() {
   <div id="loading">Loading PDF document...</div>
   <div id="container"></div>
   <div id="pageCountBadge" style="display:none;"></div>
+
+  <script id="pdf-base64" type="text/plain">${safeBase64}</script>
+  <script id="pdf-uri" type="text/plain">${safeUri}</script>
+
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     async function renderPdf() {
       try {
-        const loadingTask = pdfjsLib.getDocument(${sourceParam});
+        const rawB64 = (document.getElementById('pdf-base64')?.textContent || '').replace(/\\s+/g, '');
+        let source;
+        if (rawB64) {
+          const binary = atob(rawB64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          source = { data: bytes };
+        } else {
+          const docUri = (document.getElementById('pdf-uri')?.textContent || '').trim();
+          if (docUri.startsWith('http://') || docUri.startsWith('https://')) {
+            source = docUri;
+          } else {
+            throw new Error('PDF document could not be read or is missing.');
+          }
+        }
+
+        const loadingTask = pdfjsLib.getDocument(source);
         const pdf = await loadingTask.promise;
         document.getElementById('loading').style.display = 'none';
         const badge = document.getElementById('pageCountBadge');
@@ -481,7 +534,7 @@ export function DecoyLockScreen() {
               </View>
             ) : WebView ? (
               <View style={styles.nativePdfContainer}>
-                {pdfLoading ? (
+                {pdfLoading || (!pdfBase64 && !doc?.uri?.startsWith("http")) ? (
                   <View style={styles.pdfLoadingBox}>
                     <ActivityIndicator size="large" color="#6D28D9" />
                     <Text style={styles.pdfLoadingText}>Loading PDF document...</Text>

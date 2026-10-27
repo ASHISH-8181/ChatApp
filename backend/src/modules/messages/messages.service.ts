@@ -13,6 +13,8 @@ import type {
   FriendRequestInfo,
   FriendStatusResponse,
   CheckAvailabilityResponse,
+  ChatWallpaperData,
+  SetChatWallpaperPayload,
 } from "@chatapp/shared";
 import { prisma } from "../../db/prisma.js";
 import { config } from "../../config/index.js";
@@ -2461,6 +2463,100 @@ export class MessagesService {
     }
 
     return { original: clean, translated: clean, targetLang };
+  }
+
+  /**
+   * Get chat wallpaper for a 1-on-1 direct chat
+   */
+  async getChatWallpaper(
+    userId: string,
+    contactId: string
+  ): Promise<ChatWallpaperData | null> {
+    const [u1, u2] = [userId, contactId].sort();
+    const wallpaper = await prisma.chatWallpaper.findUnique({
+      where: {
+        user1Id_user2Id: {
+          user1Id: u1,
+          user2Id: u2,
+        },
+      },
+    });
+
+    if (!wallpaper) return null;
+
+    return {
+      wallpaperUrl: wallpaper.wallpaperUrl,
+      scale: wallpaper.scale,
+      translateX: wallpaper.translateX,
+      translateY: wallpaper.translateY,
+      updatedAt: wallpaper.updatedAt.toISOString(),
+      updatedBy: wallpaper.updatedBy || undefined,
+    };
+  }
+
+  /**
+   * Set or update chat wallpaper for a 1-on-1 direct chat
+   */
+  async setChatWallpaper(payload: SetChatWallpaperPayload): Promise<ChatWallpaperData> {
+    const [u1, u2] = [payload.userId, payload.contactId].sort();
+    const scale = typeof payload.scale === "number" ? payload.scale : 1.0;
+    const translateX = typeof payload.translateX === "number" ? payload.translateX : 0.0;
+    const translateY = typeof payload.translateY === "number" ? payload.translateY : 0.0;
+
+    const record = await prisma.chatWallpaper.upsert({
+      where: {
+        user1Id_user2Id: {
+          user1Id: u1,
+          user2Id: u2,
+        },
+      },
+      update: {
+        wallpaperUrl: payload.wallpaperUrl,
+        scale,
+        translateX,
+        translateY,
+        updatedBy: payload.userId,
+      },
+      create: {
+        user1Id: u1,
+        user2Id: u2,
+        wallpaperUrl: payload.wallpaperUrl,
+        scale,
+        translateX,
+        translateY,
+        updatedBy: payload.userId,
+      },
+    });
+
+    return {
+      wallpaperUrl: record.wallpaperUrl,
+      scale: record.scale,
+      translateX: record.translateX,
+      translateY: record.translateY,
+      updatedAt: record.updatedAt.toISOString(),
+      updatedBy: record.updatedBy || undefined,
+    };
+  }
+
+  /**
+   * Remove chat wallpaper for a 1-on-1 direct chat
+   */
+  async removeChatWallpaper(userId: string, contactId: string): Promise<void> {
+    const [u1, u2] = [userId, contactId].sort();
+    try {
+      await prisma.chatWallpaper.delete({
+        where: {
+          user1Id_user2Id: {
+            user1Id: u1,
+            user2Id: u2,
+          },
+        },
+      });
+    } catch (err: any) {
+      if (err.code !== "P2025") {
+        throw err;
+      }
+    }
   }
 }
 

@@ -17,6 +17,8 @@ import type {
   MMMessage,
   FriendRequestInfo,
   FriendStatusResponse,
+  ChatWallpaperData,
+  SetChatWallpaperPayload,
 } from "@chatapp/shared";
 
 function resolveDefaultServerUrl(): string {
@@ -968,4 +970,46 @@ export async function loginUserApi(
   if (!response.ok) throw new Error(data.error || "Incorrect credentials");
   return data;
 }
+
+export async function getChatWallpaperApi(
+  user1Id: string,
+  user2Id: string
+): Promise<ChatWallpaperData | null> {
+  const url = `${getServerUrl()}/api/messages/wallpaper?user1Id=${encodeURIComponent(user1Id)}&user2Id=${encodeURIComponent(user2Id)}`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to load chat wallpaper");
+  return data.wallpaper || null;
+}
+
+export async function setChatWallpaperApi(
+  payload: SetChatWallpaperPayload
+): Promise<ChatWallpaperData> {
+  const url = `${getServerUrl()}/api/messages/wallpaper`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to set chat wallpaper");
+  return data.wallpaper;
+}
+
+export async function removeChatWallpaperApi(
+  userId: string,
+  contactId: string
+): Promise<void> {
+  const url = `${getServerUrl()}/api/messages/wallpaper`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ userId, contactId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to remove chat wallpaper");
+}
+
 

@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import { Ionicons } from "@/components/Icon";
 import {
   useDecoyLock,
@@ -55,10 +56,22 @@ export function DecoyLockSetupModal() {
 
       if (!res.canceled && res.assets && res.assets.length > 0) {
         const asset = res.assets[0];
+        let finalUri = asset.uri;
+
+        if (Platform.OS !== "web" && FileSystem.documentDirectory) {
+          try {
+            const dest = `${FileSystem.documentDirectory}decoy_img_${Date.now()}.jpg`;
+            await FileSystem.copyAsync({ from: asset.uri, to: dest });
+            finalUri = dest;
+          } catch (copyErr) {
+            console.warn("[DecoyLock] Failed copying image to documentDirectory:", copyErr);
+          }
+        }
+
         const newDoc: DecoyDocument = {
           id: `custom-img-${Date.now()}`,
           name: asset.fileName || "Uploaded_Document_Image.jpg",
-          uri: asset.uri,
+          uri: finalUri,
           type: "image",
           subtitle: "Uploaded Image Document",
           pageCount: 1,
@@ -87,10 +100,23 @@ export function DecoyLockSetupModal() {
         const isPdf =
           (asset.mimeType || "").includes("pdf") ||
           asset.name.toLowerCase().endsWith(".pdf");
+
+        let finalUri = asset.uri;
+        if (Platform.OS !== "web" && FileSystem.documentDirectory) {
+          try {
+            const ext = isPdf ? ".pdf" : ".jpg";
+            const dest = `${FileSystem.documentDirectory}decoy_doc_${Date.now()}${ext}`;
+            await FileSystem.copyAsync({ from: asset.uri, to: dest });
+            finalUri = dest;
+          } catch (copyErr) {
+            console.warn("[DecoyLock] Failed copying file to documentDirectory:", copyErr);
+          }
+        }
+
         const newDoc: DecoyDocument = {
           id: `custom-doc-${Date.now()}`,
           name: asset.name,
-          uri: asset.uri,
+          uri: finalUri,
           type: isPdf ? "pdf" : "image",
           subtitle: isPdf ? "Uploaded PDF Document" : "Uploaded Document Image",
           pageCount: 1,

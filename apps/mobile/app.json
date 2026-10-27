@@ -67,7 +67,13 @@
           "savePhotosPermission": "Allow ChatApp to save photos to your gallery."
         }
       ],
-      "@clerk/expo"
+      "@clerk/expo",
+      "expo-font",
+      "expo-image",
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

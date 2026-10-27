@@ -240,6 +240,35 @@ export default function GroupsTabScreen() {
   // Group Header Options Menu
   const [showGroupOptionsMenu, setShowGroupOptionsMenu] = useState(false);
 
+  // Android keyboard height tracking for WhatsApp-like bottom bar elevation
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    const handleShow = (e: any) => {
+      const h = e?.endCoordinates?.height ?? 0;
+      if (h > 0) {
+        setAndroidKeyboardHeight(h);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 50);
+      }
+    };
+
+    const handleHide = () => {
+      setAndroidKeyboardHeight(0);
+    };
+
+    const showSub = Keyboard.addListener("keyboardDidShow", handleShow);
+    const hideSub = Keyboard.addListener("keyboardDidHide", handleHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
   // Screen Capture Protection State for Chugli Groups
@@ -444,7 +473,7 @@ export default function GroupsTabScreen() {
 
     let isMounted = true;
 
-    // 1. Immediately hydrate from local persistent cache (0ms instant render)
+    // 1. Immediately hydrate from local persistent cache (0ms instant render for offline access)
     Promise.all([
       mobileCache.getCachedGroups(currentUser.id),
       mobileCache.getCachedInvitations(currentUser.id),
@@ -452,52 +481,71 @@ export default function GroupsTabScreen() {
       mobileCache.getCachedUsers(),
     ]).then(([cachedGroups, cachedInvites, cachedMessages, cachedUsers]) => {
       if (!isMounted) return;
-      if (cachedGroups && cachedGroups.length > 0) {
+      if (cachedGroups) {
         setGroups(cachedGroups);
         setLoadingGroups(false);
       }
-      if (cachedInvites && cachedInvites.length > 0) {
+      if (cachedInvites) {
         setPendingInvitations(cachedInvites);
       }
-      if (cachedMessages && cachedMessages.length > 0) {
+      if (cachedMessages) {
         setMessages(cachedMessages);
       }
-      if (cachedUsers && cachedUsers.length > 0) {
+      if (cachedUsers) {
         setRegisteredUsers(cachedUsers);
       }
     });
 
-    // 2. Fetch latest data from server in background (Stale-While-Revalidate)
-    Promise.all([
-      fetchGroups(currentUser.id),
-      fetchUserInvitations(currentUser.id),
-      fetchMessageHistory({ currentUserId: currentUser.id }),
-      fetchAllUsers(),
-    ])
-      .then(([loadedGroups, loadedInvites, loadedMessages, users]) => {
+    // 2. Background sync function (Stale-While-Revalidate without blocking offline UI)
+    const syncGroupsInBackground = async () => {
+      try {
+        const [loadedGroups, loadedInvites, loadedMessages, users] = await Promise.all([
+          fetchGroups(currentUser.id).catch(() => null),
+          fetchUserInvitations(currentUser.id).catch(() => null),
+          fetchMessageHistory({ currentUserId: currentUser.id }).catch(() => null),
+          fetchAllUsers().catch(() => null),
+        ]);
         if (!isMounted) return;
-        setGroups(loadedGroups);
-        setPendingInvitations(loadedInvites);
-        setMessages(loadedMessages);
-        setRegisteredUsers(users);
-        setLoadingGroups(false);
+        if (loadedGroups) {
+          setGroups(loadedGroups);
+          mobileCache.setCachedGroups(currentUser.id, loadedGroups);
+        }
+        if (loadedInvites) {
+          setPendingInvitations(loadedInvites);
+          mobileCache.setCachedInvitations(currentUser.id, loadedInvites);
+        }
+        if (loadedMessages) {
+          setMessages((prev) => {
+            const map = new Map<string, ChatMessage>();
+            prev.forEach((m) => map.set(m.id, m));
+            loadedMessages.forEach((m) => map.set(m.id, m));
+            const merged = Array.from(map.values());
+            mobileCache.setCachedMessages(currentUser.id, merged);
+            return merged;
+          });
+        }
+        if (users) {
+          setRegisteredUsers(users);
+          mobileCache.setCachedUsers(users);
+        }
+      } catch (err: any) {
+        console.warn("[Groups] Background sync (offline):", err?.message);
+      } finally {
+        if (isMounted) setLoadingGroups(false);
+      }
+    };
 
-        // Update persistent cache
-        mobileCache.setCachedGroups(currentUser.id, loadedGroups);
-        mobileCache.setCachedInvitations(currentUser.id, loadedInvites);
-        mobileCache.setCachedMessages(currentUser.id, loadedMessages);
-        mobileCache.setCachedUsers(users);
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        console.warn("Error loading groups & invites:", err.message);
-        setLoadingGroups(false);
-      });
+    // Initial background sync
+    syncGroupsInBackground();
 
     const unsubStatus = socketService.subscribeToStatus((status) => {
       if (!isMounted) return;
       setConnectionStatus(status);
-      if (status === "connected") setBannerError(null);
+      if (status === "connected") {
+        setBannerError(null);
+        // Automatically sync with backend when re-connected
+        syncGroupsInBackground();
+      }
     });
 
     const unsubPresence = socketService.subscribeToPresence((ids) => {
@@ -1841,9 +1889,12 @@ export default function GroupsTabScreen() {
 
           {/* Group Messages Stream */}
           <KeyboardAvoidingView
-            style={styles.keyboardContainer}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 25}
+            style={[
+              styles.keyboardContainer,
+              Platform.OS === "android" && { paddingBottom: androidKeyboardHeight },
+            ]}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
           >
             {/* Subtle Background Confidential Watermark */}
             {activeGroup.isChugli && (

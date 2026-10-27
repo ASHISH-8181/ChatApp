@@ -10,6 +10,9 @@ import type {
   ChatUser,
   MarkReadPayload,
   GameChatMessage,
+  SetChatWallpaperPayload,
+  RemoveChatWallpaperPayload,
+  ChatWallpaperUpdatedEvent,
 } from "@chatapp/shared";
 
 // In-memory active presence tracker (userId -> Set of active socket IDs)
@@ -23,9 +26,14 @@ function getOnlineUserIds(): string[] {
 export function registerChatSocket(
   io: SocketIOServer<ClientToServerEvents, ServerToClientEvents>
 ) {
+  let presenceBroadcastTimer: any = null;
   function broadcastPresence() {
-    const onlineIds = getOnlineUserIds();
-    io.emit("users:presence", onlineIds);
+    if (presenceBroadcastTimer) return;
+    presenceBroadcastTimer = setTimeout(() => {
+      presenceBroadcastTimer = null;
+      const onlineIds = getOnlineUserIds();
+      io.emit("users:presence", onlineIds);
+    }, 1000);
   }
 
   io.on("connection", (socket: Socket<ClientToServerEvents, ServerToClientEvents>) => {
@@ -54,13 +62,20 @@ export function registerChatSocket(
         const allUsers = await messagesService.getAllUsers();
         socket.emit("users:list", allUsers);
 
-        // Notify other connected clients about the user and updated lists
+        // Notify other connected clients about the joined user
         socket.broadcast.emit("user:joined", userPayload);
-        socket.broadcast.emit("users:list", allUsers);
 
         // Join personalized room for secret updates and direct alerts
         socket.join(`mm:user:${userPayload.id}`);
         socket.join(`user:${userPayload.id}`);
+
+        // Join group rooms for targeted group broadcasts
+        try {
+          const userGroups = await messagesService.getGroups(userPayload.id);
+          for (const g of userGroups) {
+            socket.join(`group:${g.id}`);
+          }
+        } catch {}
 
         // Broadcast updated presence
         broadcastPresence();
@@ -122,8 +137,17 @@ export function registerChatSocket(
           broadcastMsg.clientTempId = payload.clientTempId;
         }
 
-        // 2. Broadcast to ALL connected clients
-        io.emit("chat:message", broadcastMsg);
+        // Targeted message delivery for high-concurrency 1k+ scalability
+        if (payload.recipientId) {
+          // Direct 1-on-1: emit strictly to sender & recipient rooms
+          io.to(`user:${payload.senderId}`).to(`user:${payload.recipientId}`).emit("chat:message", broadcastMsg);
+        } else if (payload.groupId) {
+          // Group chat: emit to group room + sender
+          io.to(`group:${payload.groupId}`).to(`user:${payload.senderId}`).emit("chat:message", broadcastMsg);
+        } else {
+          // Fallback global broadcast
+          io.emit("chat:message", broadcastMsg);
+        }
 
         if (callback) {
           callback({ status: "ok", message: broadcastMsg });
@@ -896,6 +920,59 @@ export function registerChatSocket(
         console.error("[Socket.IO] user:alias:set error:", err.message);
         if (callback) {
           callback({ status: "error", message: err.message || "Failed to set alias" });
+        }
+      }
+    });
+
+    // Handle setting a custom chat wallpaper between two users
+    socket.on("chat:set_wallpaper", async (payload: SetChatWallpaperPayload, callback) => {
+      try {
+        const wallpaper = await messagesService.setChatWallpaper(payload);
+        const [u1, u2] = [payload.userId, payload.contactId].sort();
+        const chatKey = `${u1}:${u2}`;
+        const eventData: ChatWallpaperUpdatedEvent = {
+          chatKey,
+          user1Id: u1,
+          user2Id: u2,
+          wallpaper,
+        };
+        // Emit to both users so both see the wallpaper update in real-time
+        io.to(`user:${payload.userId}`).emit("chat:wallpaper_updated", eventData);
+        io.to(`user:${payload.contactId}`).emit("chat:wallpaper_updated", eventData);
+
+        if (callback) {
+          callback({ status: "ok", wallpaper });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] chat:set_wallpaper error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to set wallpaper" });
+        }
+      }
+    });
+
+    // Handle removing chat wallpaper
+    socket.on("chat:remove_wallpaper", async (payload: RemoveChatWallpaperPayload, callback) => {
+      try {
+        await messagesService.removeChatWallpaper(payload.userId, payload.contactId);
+        const [u1, u2] = [payload.userId, payload.contactId].sort();
+        const chatKey = `${u1}:${u2}`;
+        const eventData: ChatWallpaperUpdatedEvent = {
+          chatKey,
+          user1Id: u1,
+          user2Id: u2,
+          wallpaper: null,
+        };
+        io.to(`user:${payload.userId}`).emit("chat:wallpaper_updated", eventData);
+        io.to(`user:${payload.contactId}`).emit("chat:wallpaper_updated", eventData);
+
+        if (callback) {
+          callback({ status: "ok" });
+        }
+      } catch (err: any) {
+        console.error("[Socket.IO] chat:remove_wallpaper error:", err.message);
+        if (callback) {
+          callback({ status: "error", message: err.message || "Failed to remove wallpaper" });
         }
       }
     });

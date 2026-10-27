@@ -13,7 +13,8 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as AuthSession from "expo-auth-session";
+// expo-auth-session is loaded lazily (only on native) because it transitively
+// requires expo-crypto which needs a native module not present in Expo Go.
 import * as WebBrowser from "expo-web-browser";
 import {
   useUser as useClerkUser,
@@ -326,6 +327,9 @@ export default function EntryScreen() {
       }
 
       // Native mobile: use AuthSession & startSSOFlow
+      // Dynamic require so expo-crypto (native-only) is not evaluated on module load
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const AuthSession = require("expo-auth-session") as typeof import("expo-auth-session");
       const redirectUrl = AuthSession.makeRedirectUri({
         scheme: "chatapp",
         path: "sso-callback",
@@ -766,12 +770,15 @@ export default function EntryScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardView}
+        keyboardVerticalOffset={Platform.OS === "android" ? 0 : 0}
       >
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
         >
           {/* Brand Header */}
           <View style={styles.header}>
@@ -1377,10 +1384,11 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    justifyContent: "center",
+    justifyContent: "flex-start",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingVertical: 32,
+    paddingTop: 24,
+    paddingBottom: 40,
   },
   header: {
     alignItems: "center",
